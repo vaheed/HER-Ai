@@ -7,14 +7,17 @@ from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandl
 
 from config import AppConfig
 from memory import HERMemory, RedisContextStore
+from utils.metrics import HERMetrics
 
 WELCOME_MESSAGE: Final[str] = (
     "Hi! I'm HER. The core systems are running and ready for Telegram testing.\n"
     "Send a message and I'll acknowledge it while logging context."
 )
 
+logger = logging.getLogger("her-telegram")
 
-def build_application(config: AppConfig, memory: HERMemory) -> Application:
+
+def build_application(config: AppConfig, memory: HERMemory, metrics: HERMetrics) -> Application:
     if not config.telegram_bot_token:
         raise ValueError("TELEGRAM_BOT_TOKEN is required to start the Telegram bot.")
 
@@ -38,6 +41,8 @@ def build_application(config: AppConfig, memory: HERMemory) -> Application:
             f"*User ID*: `{user_id}`\n"
             f"*Message*: {message_text}"
         )
+        metrics.record_interaction(user_id, message_text, response)
+        logger.info("Logged interaction for user %s", user_id)
         await update.message.reply_text(response, parse_mode=ParseMode.MARKDOWN)
 
     application = Application.builder().token(config.telegram_bot_token).build()
@@ -58,6 +63,11 @@ def run_bot() -> None:
         ttl_seconds=86400,
     )
     memory = HERMemory(config, redis_store)
+    metrics = HERMetrics(
+        host=config.redis_host,
+        port=config.redis_port,
+        password=config.redis_password,
+    )
 
-    app = build_application(config, memory)
+    app = build_application(config, memory, metrics)
     app.run_polling(allowed_updates=Update.ALL_TYPES)

@@ -641,15 +641,17 @@ class ReflectionAgent:
 - Create real-time monitoring
 - Add personality tuning UI
 - Implement memory explorer
+- Surface usage metrics
 
 **Tasks:**
-- [ ] Set up Streamlit application
+- [x] Set up Streamlit application
 - [ ] Create dashboard layout
   - Overview page
   - Conversation monitor
   - Memory explorer
   - Personality tuner
   - Agent activity logs
+- [x] Add usage metrics summary (tokens, users, last response)
 - [ ] Implement real-time updates (websockets)
 - [ ] Build personality trait sliders
 - [ ] Create memory search interface

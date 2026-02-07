@@ -1,5 +1,8 @@
+import json
 import os
-from datetime import datetime
+from datetime import datetime, timezone
+
+import redis
 
 import streamlit as st
 
@@ -28,5 +31,45 @@ st.subheader("Quick Links")
 st.write("- Docker Compose: `docker compose ps`")
 st.write("- Logs: `docker compose logs -f her-bot`")
 
+st.subheader("Usage Metrics")
+redis_host = os.getenv("REDIS_HOST", "redis")
+redis_port = int(os.getenv("REDIS_PORT", "6379"))
+redis_password = os.getenv("REDIS_PASSWORD", "")
+
+try:
+    redis_client = redis.Redis(
+        host=redis_host,
+        port=redis_port,
+        password=redis_password,
+        decode_responses=True,
+    )
+    total_tokens = int(redis_client.get("her:metrics:tokens") or 0)
+    total_messages = int(redis_client.get("her:metrics:messages") or 0)
+    unique_users = int(redis_client.scard("her:metrics:users") or 0)
+    last_response_raw = redis_client.get("her:metrics:last_response")
+    events_raw = redis_client.lrange("her:metrics:events", 0, 9)
+except redis.RedisError as exc:
+    st.warning(f"Unable to load metrics from Redis: {exc}")
+    total_tokens = 0
+    total_messages = 0
+    unique_users = 0
+    last_response_raw = None
+    events_raw = []
+
+metrics_col1, metrics_col2, metrics_col3 = st.columns(3)
+metrics_col1.metric("Total Token Estimate", total_tokens)
+metrics_col2.metric("Total Messages", total_messages)
+metrics_col3.metric("Unique Users", unique_users)
+
+if last_response_raw:
+    st.markdown("**Last Response**")
+    st.json(json.loads(last_response_raw))
+else:
+    st.info("No responses recorded yet.")
+
+if events_raw:
+    st.markdown("**Recent Activity**")
+    st.table([json.loads(entry) for entry in events_raw])
+
 st.subheader("Last Updated")
-st.write(datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC"))
+st.write(datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"))

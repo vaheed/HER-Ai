@@ -1,6 +1,6 @@
 crewai==0.28.0
 mem0ai==0.0.9
-openai==1.13.3
+openai==1.33.0
 groq==0.4.2
 psycopg2-binary==2.9.9
 redis==5.0.1

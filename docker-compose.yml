@@ -2,6 +2,7 @@ version: "3.9"
 
 services:
   her-bot:
+    image: ghcr.io/vaheed/her-ai/her-bot:latest
     build:
       context: .
       dockerfile: her-core/Dockerfile
@@ -47,6 +48,8 @@ services:
     image: redis:7-alpine
     container_name: her-redis
     command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:-changeme456}"]
+    volumes:
+      - redis_data:/data
     ports:
       - "6379:6379"
     networks:
@@ -58,9 +61,53 @@ services:
       timeout: 5s
       retries: 5
 
+  sandbox:
+    image: ghcr.io/vaheed/her-ai/her-sandbox:latest
+    build:
+      context: ./sandbox
+    container_name: her-sandbox
+    networks:
+      - her-network
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:noexec,nosuid,size=100m
+    volumes:
+      - sandbox_workspace:/workspace
+    healthcheck:
+      test: ["CMD", "bash", "-lc", "test -d /workspace"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  dashboard:
+    image: ghcr.io/vaheed/her-ai/her-dashboard:latest
+    build:
+      context: ./dashboard
+    container_name: her-dashboard
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file:
+      - .env
+    ports:
+      - "8501:8501"
+    networks:
+      - her-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; s=socket.socket(); s.settimeout(2); s.connect(('localhost', 8501)); s.close()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
 networks:
   her-network:
     driver: bridge
 
 volumes:
   postgres_data:
+  redis_data:
+  sandbox_workspace:

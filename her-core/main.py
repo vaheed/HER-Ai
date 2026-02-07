@@ -5,7 +5,9 @@ from pathlib import Path
 
 from config import AppConfig
 from memory import HERMemory, RedisContextStore
-from agents import ConversationAgent, ReflectionAgent, PersonalityAgent
+from agents import ConversationAgent, ReflectionAgent, PersonalityAgent, ToolAgent
+from agents.crew_orchestrator import CrewOrchestrator
+from telegram_bot import run_bot
 
 
 class HealthHandler(BaseHTTPRequestHandler):
@@ -38,12 +40,26 @@ def main() -> None:
     )
     memory = HERMemory(config, redis_store)
 
+    if config.app_mode == "telegram":
+        logger.info("Starting Telegram bot mode")
+        run_bot()
+        return
+
     agents_config = Path("/app/config/agents.yaml")
     personality_config = Path("/app/config/personality.yaml")
 
     conversation_agent = ConversationAgent(agents_config).build()
     reflection_agent = ReflectionAgent(agents_config).build()
     personality_agent = PersonalityAgent(agents_config, personality_config).build()
+    tool_agent = ToolAgent(agents_config).build()
+    CrewOrchestrator().build_crew(
+        {
+            "conversation": conversation_agent,
+            "reflection": reflection_agent,
+            "personality": personality_agent,
+            "tool": tool_agent,
+        }
+    )
 
     logger.info("✓ PostgreSQL connected with pgvector enabled")
     logger.info("✓ Redis connected")
@@ -51,6 +67,8 @@ def main() -> None:
     logger.info("✓ Conversation Agent created")
     logger.info("✓ Reflection Agent created")
     logger.info("✓ Personality Agent created")
+    logger.info("✓ Tool Agent created")
+    logger.info("✓ CrewAI coordination ready")
 
     user_id = "demo-user"
     memory.update_context(user_id, "Hello HER", "user")

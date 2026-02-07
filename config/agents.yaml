@@ -17,3 +17,9 @@ personality_agent:
   boundaries:
     min: 20
     max: 95
+
+tool_agent:
+  role: "Task Executor"
+  goal: "Safely execute external tools and operations"
+  temperature: 0.2
+  max_tokens: 400

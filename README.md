@@ -132,6 +132,9 @@ POSTGRES_DB=her_memory
 
 # Redis
 REDIS_PASSWORD=redis_secure_password
+
+# App
+APP_MODE=core
 ```
 
 3. **Launch HER**
@@ -148,7 +151,9 @@ docker-compose ps
 docker-compose logs -f her-bot
 ```
 
-5. **Start Chatting**
+5. **Start Chatting (Telegram Test Mode)**
+- Set `APP_MODE=telegram` in your `.env` file.
+- Restart the service: `docker-compose up -d --force-recreate her-bot`
 - Open Telegram
 - Message your bot: `/start`
 - Begin your journey with HER
@@ -291,6 +296,21 @@ User: I love hiking on weekends
 Later...
 HER: With the weather looking nice this weekend, are you planning 
      any hikes? You mentioned loving those.
+```
+
+## 📦 Build & Publish (GitHub Container Registry)
+
+The Docker Compose file is wired to GHCR images for `her-bot`, `her-dashboard`, and `her-sandbox`.
+
+```bash
+# Build images
+docker compose build
+
+# Login to GHCR
+echo $GITHUB_TOKEN | docker login ghcr.io -u YOUR_GITHUB_USERNAME --password-stdin
+
+# Push images
+docker compose push
 ```
 
 ## 🤝 Contributing

@@ -22,8 +22,12 @@ class AppConfig:
     redis_port: int = int(os.getenv("REDIS_PORT", "6379"))
     redis_password: str = os.getenv("REDIS_PASSWORD", "changeme456")
 
+    telegram_bot_token: str | None = os.getenv("TELEGRAM_BOT_TOKEN")
+    telegram_admin_user_id: str | None = os.getenv("ADMIN_USER_ID")
+
     log_level: str = os.getenv("LOG_LEVEL", "INFO")
     environment: str = os.getenv("ENVIRONMENT", "development")
+    app_mode: str = os.getenv("APP_MODE", "core")
 
     @property
     def postgres_dsn(self) -> str:

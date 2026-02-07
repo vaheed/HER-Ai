@@ -1288,7 +1288,7 @@ EVOLUTION_SPEED=medium   # slow, medium, fast
 ### File Structure
 
 ```
-her-ai-assistant/
+HER-Ai/
 ├── docker-compose.yml
 ├── .env
 ├── .env.example

@@ -93,8 +93,8 @@ Unlike typical AI assistants, HER learns, grows, and maintains authentic warmth 
 
 1. **Clone Repository**
 ```bash
-git clone https://github.com/yourusername/her-ai-assistant.git
-cd her-ai-assistant
+git clone https://github.com/vaheed/HER-Ai.git
+cd HER-Ai
 ```
 
 2. **Configure Environment**
@@ -309,8 +309,9 @@ MIT License - see [LICENSE](LICENSE) for details.
 
 ## 📞 Support
 
-- **Issues**: [GitHub Issues](https://github.com/yourusername/her-ai-assistant/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/yourusername/her-ai-assistant/discussions)
+- **Documentation**: https://vaheed.github.io/HER-Ai/
+- **Issues**: [GitHub Issues](https://github.com/vaheed/HER-Ai/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/vaheed/HER-Ai/discussions)
 - **Email**: support@her-ai.dev
 
 ---

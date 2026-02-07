@@ -1,0 +1,10 @@
+default_traits:
+  warmth: 75
+  curiosity: 80
+  assertiveness: 60
+  humor: 70
+  emotional_depth: 85
+
+immutable_values:
+  - empathy
+  - safety_awareness

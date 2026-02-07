@@ -1,0 +1,17 @@
+site_name: HER-Ai Documentation
+site_url: https://vaheed.github.io/HER-Ai/
+repo_url: https://github.com/vaheed/HER-Ai
+repo_name: vaheed/HER-Ai
+nav:
+  - Home: index.md
+  - Architecture: architecture.md
+  - Roadmap: roadmap.md
+  - Phase 1 Prompt: phase1_prompt.md
+  - MCP Guide: mcp_guide.md
+
+theme:
+  name: material
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - content.code.copy

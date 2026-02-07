@@ -8,6 +8,7 @@ nav:
   - Roadmap: roadmap.md
   - Phase 1 Prompt: phase1_prompt.md
   - MCP Guide: mcp_guide.md
+  - Admin Dashboard: dashboard.md
 
 theme:
   name: material

@@ -8,7 +8,7 @@ Welcome to the documentation for **HER-Ai**, a personal AI assistant designed fo
 - [Roadmap](roadmap.md)
 - [Phase 1 Build Prompt](phase1_prompt.md)
 - [MCP Integration Guide](mcp_guide.md)
-- [Admin Dashboard](../dashboard/app.py)
+- [Admin Dashboard](dashboard.md)
 
 ## What is HER-Ai?
 HER-Ai is inspired by the movie **"HER"** and focuses on creating a warm, adaptive, and emotionally intelligent assistant. The system is composed of:

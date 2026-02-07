@@ -1,0 +1,8 @@
+short_term:
+  ttl: 86400
+  max_messages: 20
+
+long_term:
+  importance_threshold: 0.7
+  embedding_model: "text-embedding-3-small"
+  vector_dimensions: 1536

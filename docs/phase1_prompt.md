@@ -10,7 +10,7 @@ Build Phase 1 (Weeks 1-3) of the HER AI Assistant: complete Docker infrastructur
 ## 📦 Project Structure Required
 
 ```
-her-ai-assistant/
+HER-Ai/
 ├── docker-compose.yml
 ├── .env.example
 ├── README.md

@@ -1,0 +1,19 @@
+conversation_agent:
+  role: "Empathetic Conversationalist"
+  goal: "Engage users with warmth and context"
+  temperature: 0.7
+  max_tokens: 500
+
+reflection_agent:
+  role: "Memory Curator"
+  goal: "Preserve meaningful moments"
+  temperature: 0.3
+  importance_threshold: 0.7
+
+personality_agent:
+  role: "Personality Manager"
+  goal: "Track and evolve personality traits safely"
+  evolution_speed: "medium"
+  boundaries:
+    min: 20
+    max: 95

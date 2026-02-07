@@ -16,41 +16,39 @@ Unlike typical AI assistants, HER learns, grows, and maintains authentic warmth 
 
 ## 🏗️ Architecture Overview
 
+HER is designed as a layered system that separates user interaction, agent
+orchestration, memory, and tool execution. This makes it easier to scale,
+observe, and evolve each component independently.
+
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                      Telegram Bot Interface                  │
-│                    (Admin & Public Modes)                    │
+│                   Experience & Interfaces                    │
+│   Telegram Bot (Admin/Public) · Admin Dashboard (Streamlit)  │
 └────────────────────┬────────────────────────────────────────┘
                      │
 ┌────────────────────▼────────────────────────────────────────┐
-│                    CrewAI Agent System                       │
-│  ┌──────────────┬──────────────┬──────────────────────┐    │
-│  │Conversation  │  Reflection  │   Personality        │    │
-│  │   Agent      │    Agent     │   Evolution Agent    │    │
-│  └──────────────┴──────────────┴──────────────────────┘    │
+│                Agent Orchestration (CrewAI)                  │
+│  Conversation · Reflection · Personality · Tool Agents       │
 └────────────────────┬────────────────────────────────────────┘
                      │
 ┌────────────────────▼────────────────────────────────────────┐
-│                      Memory Layer (Mem0)                     │
-│  ┌──────────────────────────────────────────────────────┐  │
-│  │   Redis (Short-Term)   │  PostgreSQL + pgvector      │  │
-│  │   - Recent context     │  - Long-term memories       │  │
-│  │   - 24h TTL           │  - User facts               │  │
-│  │                       │  - Emotional signals        │  │
-│  └──────────────────────────────────────────────────────┘  │
+│                 Memory & State (Mem0 + Redis)                │
+│  Short-Term Context (Redis TTL) · Long-Term Memory (pgvector) │
 └────────────────────┬────────────────────────────────────────┘
                      │
 ┌────────────────────▼────────────────────────────────────────┐
-│                    Tool Ecosystem                            │
-│  ┌──────────────────────────────────────────────────────┐  │
-│  │  Ubuntu Sandbox Container (E2B/Docker)               │  │
-│  │  - Web search (DuckDuckGo, Serper API)              │  │
-│  │  - Code execution (Python, Node.js)                  │  │
-│  │  - File operations                                   │  │
-│  │  - Data analysis                                     │  │
-│  └──────────────────────────────────────────────────────┘  │
+│                Tools & Execution Environment                 │
+│  Sandbox Container · MCP Servers · Web/Code/File Operations  │
 └─────────────────────────────────────────────────────────────┘
 ```
+
+**Key characteristics**
+- **Separation of concerns:** Interaction, reasoning, memory, and tools are
+  isolated for clarity and maintainability.
+- **Operational visibility:** Health checks, logs, and the admin dashboard
+  provide real-time system status and usage insight.
+- **Extensible integrations:** MCP servers and sandbox tools allow rapid
+  expansion of capabilities without changing core logic.
 
 ## ✨ Key Features
 
@@ -167,6 +165,7 @@ Features:
 - Personality trait visualization
 - Memory explorer
 - Agent activity logs
+- Usage metrics (tokens, users, last response)
 - Manual personality tuning
 
 ## 🔌 MCP Server Integration

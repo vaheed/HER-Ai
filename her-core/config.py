@@ -27,7 +27,6 @@ class AppConfig:
 
     log_level: str = os.getenv("LOG_LEVEL", "INFO")
     environment: str = os.getenv("ENVIRONMENT", "development")
-    app_mode: str = os.getenv("APP_MODE", "core")
 
     @property
     def postgres_dsn(self) -> str:

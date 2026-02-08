@@ -109,8 +109,10 @@ ADMIN_USER_ID=your_telegram_user_id
 
 # LLM Provider (choose one)
 OPENAI_API_KEY=your_openai_api_key
+OPENAI_MODEL=gpt-4-turbo-preview
 # OR
 GROQ_API_KEY=your_groq_api_key
+GROQ_MODEL=llama3-70b-8192
 
 # Optional: MCP Servers (add any you want to use)
 # Google Drive
@@ -132,13 +134,15 @@ POSTGRES_DB=her_memory
 REDIS_PASSWORD=redis_secure_password
 
 # App
-APP_MODE=core
+LOG_LEVEL=INFO
+ENVIRONMENT=development
 ```
 
 3. **Launch HER**
 ```bash
 docker-compose up -d
 ```
+> **Production tip:** The default `docker-compose.yml` uses published container images, and the app initializes the database schema on first boot, so you can run HER with just the compose file and a `.env` file—no repo build steps required.
 
 4. **Verify Installation**
 ```bash
@@ -149,12 +153,21 @@ docker-compose ps
 docker-compose logs -f her-bot
 ```
 
-5. **Start Chatting (Telegram Test Mode)**
-- Set `APP_MODE=telegram` in your `.env` file.
+5. **Start Chatting (Telegram)**
+- Make sure your Telegram credentials are set in `.env` (`TELEGRAM_BOT_TOKEN`, `ADMIN_USER_ID`).
 - Restart the service: `docker-compose up -d --force-recreate her-bot`
 - Open Telegram
 - Message your bot: `/start`
 - Begin your journey with HER
+
+## 🧰 Troubleshooting
+
+### Docker Compose build path error (sandbox missing)
+If you see an error like:
+```
+ERROR: build path /root/her/sandbox either does not exist, is not accessible, or is not a valid URL.
+```
+ensure you are using the latest `docker-compose.yml` from this repository. The current compose file runs entirely from published images and does **not** require local build contexts such as `sandbox/`. If you're using an older compose file, update it or remove any `build:` blocks so Docker Compose doesn't try to build from missing paths.
 
 ## 📊 Admin Dashboard
 

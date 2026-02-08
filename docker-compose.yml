@@ -3,9 +3,6 @@ version: "3.9"
 services:
   her-bot:
     image: ghcr.io/vaheed/her-ai/her-bot:latest
-    build:
-      context: .
-      dockerfile: her-core/Dockerfile
     container_name: her-bot
     env_file:
       - .env
@@ -34,7 +31,6 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-her_memory}
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./init-scripts:/docker-entrypoint-initdb.d
     networks:
       - her-network
     restart: unless-stopped
@@ -63,8 +59,6 @@ services:
 
   sandbox:
     image: ghcr.io/vaheed/her-ai/her-sandbox:latest
-    build:
-      context: ./sandbox
     container_name: her-sandbox
     networks:
       - her-network
@@ -82,8 +76,6 @@ services:
 
   dashboard:
     image: ghcr.io/vaheed/her-ai/her-dashboard:latest
-    build:
-      context: ./dashboard
     container_name: her-dashboard
     depends_on:
       postgres:

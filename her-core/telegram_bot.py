@@ -6,7 +6,7 @@ from telegram.constants import ParseMode
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
 from config import AppConfig
-from memory import HERMemory, RedisContextStore
+from memory import HERMemory, RedisContextStore, initialize_database
 from utils.metrics import HERMetrics
 
 WELCOME_MESSAGE: Final[str] = (
@@ -55,6 +55,8 @@ def build_application(config: AppConfig, memory: HERMemory, metrics: HERMetrics)
 def run_bot() -> None:
     logging.basicConfig(level=logging.INFO)
     config = AppConfig()
+
+    initialize_database(config)
 
     redis_store = RedisContextStore(
         host=config.redis_host,

@@ -4,7 +4,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 from config import AppConfig
-from memory import HERMemory, RedisContextStore
+from memory import HERMemory, RedisContextStore, initialize_database
 from agents import ConversationAgent, ReflectionAgent, PersonalityAgent, ToolAgent
 from agents.crew_orchestrator import CrewOrchestrator
 from telegram_bot import run_bot
@@ -38,12 +38,13 @@ def main() -> None:
         password=config.redis_password,
         ttl_seconds=86400,
     )
+    initialize_database(config)
     memory = HERMemory(config, redis_store)
 
-    if config.app_mode == "telegram":
-        logger.info("Starting Telegram bot mode")
-        run_bot()
-        return
+    if config.telegram_bot_token:
+        logger.info("Starting Telegram bot")
+        bot_thread = threading.Thread(target=run_bot, daemon=True)
+        bot_thread.start()
 
     agents_config = Path("/app/config/agents.yaml")
     personality_config = Path("/app/config/personality.yaml")

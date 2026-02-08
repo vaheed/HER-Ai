@@ -36,3 +36,7 @@ keep the project synchronized across phases and components.
 ## Pull Request Expectations
 - Provide a clear summary of changes, tests run, and any follow-up needed.
 - Call out cross-component synchronization steps explicitly.
+
+## Dependency Notes
+- Keep `openai` version constraints compatible with both `crewai` and `langchain-openai`
+  to avoid resolver conflicts (e.g., prefer `openai>=1.40.0,<2.0.0`).

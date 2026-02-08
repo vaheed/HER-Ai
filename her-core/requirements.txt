@@ -1,4 +1,5 @@
 crewai==0.28.0
+langchain-openai==0.1.22
 mem0ai==0.0.9
 cohere==5.13.12
 httpx-sse==0.4.0

@@ -27,7 +27,7 @@ RUN useradd -m -s /bin/bash sandbox \
     && mkdir -p /workspace /home/sandbox/.config/her \
     && chown -R sandbox:sandbox /workspace /home/sandbox/.config
 
-COPY config/mcp_servers.local.yaml /home/sandbox/.config/her/mcp_servers.local.yaml
+COPY mcp_servers.local.yaml /home/sandbox/.config/her/mcp_servers.local.yaml
 RUN chown sandbox:sandbox /home/sandbox/.config/her/mcp_servers.local.yaml
 
 USER sandbox

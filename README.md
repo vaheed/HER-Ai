@@ -208,6 +208,9 @@ local usage bounded on small servers.
 ## 🧩 Free MCP Toolkit (preconfigured for sandbox)
 
 HER includes a zero-key MCP profile at `config/mcp_servers.local.yaml` with useful free servers:
+
+For container builds that use `sandbox/` as Docker context, this profile is mirrored at `sandbox/mcp_servers.local.yaml`.
+
 - filesystem
 - fetch
 - memory

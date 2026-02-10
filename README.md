@@ -108,9 +108,17 @@ TELEGRAM_BOT_TOKEN=your_telegram_bot_token
 ADMIN_USER_ID=your_telegram_user_id
 
 # LLM Provider (choose one)
+# Local-first (no cloud key required)
+LLM_PROVIDER=ollama
+OLLAMA_MODEL=llama3.2:3b
+OLLAMA_BASE_URL=http://ollama:11434
+OLLAMA_EMBED_MODEL=nomic-embed-text
+
+# OR OpenAI (optional)
 OPENAI_API_KEY=your_openai_api_key
-OPENAI_MODEL=gpt-4-turbo-preview
-# OR
+OPENAI_MODEL=gpt-4o-mini
+
+# OR Groq (optional)
 GROQ_API_KEY=your_groq_api_key
 GROQ_MODEL=llama3-70b-8192
 GROQ_API_BASE=https://api.groq.com/openai/v1
@@ -125,6 +133,15 @@ GITHUB_TOKEN=your_github_token
 
 # Slack
 SLACK_BOT_TOKEN=your_slack_bot_token
+
+# Memory / Embeddings
+MEMORY_VECTOR_PROVIDER=pgvector
+MEMORY_COLLECTION_NAME=memories
+
+# Local-first embeddings (low CPU)
+EMBEDDER_PROVIDER=ollama
+EMBEDDING_MODEL=nomic-embed-text
+EMBEDDING_DIMENSIONS=768
 
 # Database
 POSTGRES_USER=her
@@ -161,6 +178,49 @@ docker-compose logs -f her-bot
 - Message your bot: `/start`
 - Begin your journey with HER
 
+## 🧠 Local Embeddings (Ollama, low CPU)
+
+HER now supports local embeddings and local LLM inference through Ollama by default,
+so OpenAI is optional.
+
+1. Start stack:
+```bash
+docker-compose up -d
+```
+
+2. Wait for pre-pull bootstrap to complete:
+```bash
+docker-compose logs -f ollama-init
+```
+
+`ollama-init` automatically pulls both models on startup:
+- chat model: `${OLLAMA_MODEL}` (default `llama3.2:3b`)
+- embedding model: `${OLLAMA_EMBED_MODEL}` (default `nomic-embed-text`)
+
+3. Verify models are ready:
+```bash
+docker exec -it her-ollama ollama list
+```
+
+The compose file includes resource limits for `ollama` (`cpus` and `mem_limit`) to keep
+local usage bounded on small servers.
+
+## 🧩 Free MCP Toolkit (preconfigured for sandbox)
+
+HER includes a zero-key MCP profile at `config/mcp_servers.local.yaml` with useful free servers:
+- filesystem
+- fetch
+- memory
+- sequential-thinking
+- sqlite
+
+The sandbox image installs these MCP packages ahead-of-time so they are ready to use.
+
+To use inside sandbox/container environments:
+```bash
+cat /home/sandbox/.config/her/mcp_servers.local.yaml
+```
+
 ## 🧰 Troubleshooting
 
 ### Docker Compose build path error (sandbox missing)
@@ -170,6 +230,14 @@ ERROR: build path /root/her/sandbox either does not exist, is not accessible, or
 ```
 ensure you are using the latest `docker-compose.yml` from this repository. The current compose file runs entirely from published images and does **not** require local build contexts such as `sandbox/`. If you're using an older compose file, update it or remove any `build:` blocks so Docker Compose doesn't try to build from missing paths.
 
+
+
+### Mem0 `Unsupported vector store provider: pgvector`
+If `her-bot` exits with a Mem0 validation error like:
+```
+Unsupported vector store provider: pgvector
+```
+make sure the bot image is using a Mem0 release that supports pgvector (`mem0ai>=0.1.x`). This repository pins `mem0ai==0.1.117` and supports both `openai` and local `ollama` embedders; rebuild and redeploy the bot image after pulling latest changes.
 
 ### PostgreSQL `database "her" does not exist` log spam
 If your PostgreSQL logs repeatedly show:

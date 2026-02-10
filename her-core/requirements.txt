@@ -1,6 +1,6 @@
 crewai==0.28.0
 langchain-openai==0.0.5
-mem0ai==0.0.9
+mem0ai==0.1.117
 cohere==5.13.12
 httpx-sse==0.4.0
 fastapi==0.106.0
@@ -13,3 +13,4 @@ pyyaml==6.0.1
 python-dotenv==1.0.0
 pydantic==2.7.3
 python-telegram-bot==21.6
+ollama==0.4.7

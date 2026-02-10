@@ -41,3 +41,5 @@ keep the project synchronized across phases and components.
 ## Dependency Notes
 - Keep `openai` version constraints compatible with both `crewai` and `langchain-openai`
   to avoid resolver conflicts (e.g., prefer `openai>=1.13.3,<2.0.0`).
+- Keep `langchain-openai` aligned with `embedchain` constraints when present
+  (e.g., `langchain-openai==0.0.5`).

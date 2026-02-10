@@ -32,10 +32,10 @@ This repository now ships a free local MCP profile at:
 
 It is designed for out-of-the-box use (no API keys) with:
 - `@modelcontextprotocol/server-filesystem`
-- `@modelcontextprotocol/server-fetch`
+- `mcp-fetch-server`
 - `@modelcontextprotocol/server-memory`
 - `@modelcontextprotocol/server-sequential-thinking`
-- `@modelcontextprotocol/server-sqlite`
+- `@modelcontextprotocol/server-pdf`
 
 The `sandbox/Dockerfile` pre-installs these server packages globally so startup is faster
 and agents can use them immediately.

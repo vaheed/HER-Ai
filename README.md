@@ -207,7 +207,7 @@ local usage bounded on small servers.
 
 ## 🧩 Free MCP Toolkit (preconfigured for sandbox)
 
-HER includes a zero-key MCP profile at `config/mcp_servers.local.yaml` with useful free servers:
+HER includes a zero-key MCP profile at `config/mcp_servers.local.yaml` with useful free servers (all no-key):
 
 For container builds that use `sandbox/` as Docker context, this profile is mirrored at `sandbox/mcp_servers.local.yaml`.
 
@@ -215,9 +215,16 @@ For container builds that use `sandbox/` as Docker context, this profile is mirr
 - fetch
 - memory
 - sequential-thinking
-- sqlite
+- pdf
 
 The sandbox image installs these MCP packages ahead-of-time so they are ready to use.
+
+Package mapping:
+- `filesystem` -> `@modelcontextprotocol/server-filesystem`
+- `fetch` -> `mcp-fetch-server`
+- `memory` -> `@modelcontextprotocol/server-memory`
+- `sequential-thinking` -> `@modelcontextprotocol/server-sequential-thinking`
+- `pdf` -> `@modelcontextprotocol/server-pdf`
 
 To use inside sandbox/container environments:
 ```bash

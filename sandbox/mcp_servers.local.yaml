@@ -14,7 +14,7 @@ servers:
     command: npx
     args:
       - -y
-      - "@modelcontextprotocol/server-fetch"
+      - "mcp-fetch-server"
     env: {}
     description: "HTTP fetch for docs, APIs, and web content"
 
@@ -36,13 +36,11 @@ servers:
     env: {}
     description: "Structured reasoning helper"
 
-  - name: sqlite
+  - name: pdf
     enabled: true
     command: npx
     args:
       - -y
-      - "@modelcontextprotocol/server-sqlite"
-      - --db-path
-      - /workspace/mcp_local.db
+      - "@modelcontextprotocol/server-pdf"
     env: {}
-    description: "Local SQLite tools for scratch analysis"
+    description: "Parse and extract text from local PDF documents"

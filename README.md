@@ -239,6 +239,13 @@ Unsupported vector store provider: pgvector
 ```
 make sure the bot image is using a Mem0 release that supports pgvector (`mem0ai>=0.1.x`). This repository pins `mem0ai==0.1.117` and supports both `openai` and local `ollama` embedders; rebuild and redeploy the bot image after pulling latest changes.
 
+### Python dependency resolution conflict (`ResolutionImpossible`)
+If dependency installation fails with an error involving `pydantic` and `ollama`, use the pinned core dependency set from this repository. Current compatible pins are:
+- `pydantic==2.7.4`
+- `ollama==0.3.3`
+
+These pins keep `crewai`, `mem0ai`, `fastapi`, and `langsmith` compatible in the `her-core` environment.
+
 ### PostgreSQL `database "her" does not exist` log spam
 If your PostgreSQL logs repeatedly show:
 ```

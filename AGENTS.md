@@ -20,7 +20,8 @@ keep the project synchronized across phases and components.
    - If you add new configuration, update `.env.example` and relevant docs.
 
 3. **Testing is mandatory**
-   - Run the relevant tests or checks for your change and ensure they pass.
+   - Run the relevant tests or checks for your change and ensure they pass **before**
+     creating a PR.
    - If tests cannot run (missing dependencies, environment limits), document the
      reason and any mitigation steps.
 
@@ -36,3 +37,9 @@ keep the project synchronized across phases and components.
 ## Pull Request Expectations
 - Provide a clear summary of changes, tests run, and any follow-up needed.
 - Call out cross-component synchronization steps explicitly.
+
+## Dependency Notes
+- Keep `openai` version constraints compatible with both `crewai` and `langchain-openai`
+  to avoid resolver conflicts (e.g., prefer `openai>=1.13.3,<2.0.0`).
+- Keep `langchain-openai` aligned with `embedchain` constraints when present
+  (e.g., `langchain-openai==0.0.5`).

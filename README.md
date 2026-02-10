@@ -113,6 +113,7 @@ OPENAI_MODEL=gpt-4-turbo-preview
 # OR
 GROQ_API_KEY=your_groq_api_key
 GROQ_MODEL=llama3-70b-8192
+GROQ_API_BASE=https://api.groq.com/openai/v1
 
 # Optional: MCP Servers (add any you want to use)
 # Google Drive

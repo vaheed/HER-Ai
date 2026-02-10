@@ -10,28 +10,54 @@ from utils.retry import with_retry
 class HERMemory:
     def __init__(self, config: AppConfig, context_store: RedisContextStore) -> None:
         self._context_store = context_store
+
+        llm_config = self._build_llm_config(config)
+        embedder_config = self._build_embedder_config(config)
+
         self._mem0 = Memory.from_config(
             {
                 "vector_store": {
-                    "provider": "pgvector",
+                    "provider": config.memory_vector_provider,
                     "config": {
-                        "collection_name": "memories",
+                        "collection_name": config.memory_collection_name,
                         "host": config.postgres_host,
                         "port": config.postgres_port,
-                        "db_name": config.postgres_db,
+                        "dbname": config.postgres_db,
                         "user": config.postgres_user,
                         "password": config.postgres_password,
+                        "embedding_model_dims": config.embedding_dimensions,
                     },
                 },
                 "llm": {
                     "provider": config.llm_provider,
-                    "config": {
-                        "api_key": config.openai_api_key if config.llm_provider == "openai" else config.groq_api_key,
-                        "model": "text-embedding-3-small",
-                    },
+                    "config": llm_config,
                 },
+                "embedder": {
+                    "provider": config.embedder_provider,
+                    "config": embedder_config,
+                },
+                "collection_name": config.memory_collection_name,
+                "embedding_model_dims": config.embedding_dimensions,
             }
         )
+
+    @staticmethod
+    def _build_llm_config(config: AppConfig) -> dict[str, Any]:
+        if config.llm_provider == "openai":
+            return {"api_key": config.openai_api_key, "model": config.openai_model}
+        if config.llm_provider == "groq":
+            return {"api_key": config.groq_api_key, "model": config.groq_model}
+        if config.llm_provider == "ollama":
+            return {"model": config.ollama_model, "ollama_base_url": config.ollama_base_url}
+        return {}
+
+    @staticmethod
+    def _build_embedder_config(config: AppConfig) -> dict[str, Any]:
+        if config.embedder_provider == "openai":
+            return {"api_key": config.openai_api_key, "model": config.embedding_model}
+        if config.embedder_provider == "ollama":
+            return {"model": config.embedding_model, "ollama_base_url": config.ollama_base_url}
+        return {"model": config.embedding_model}
 
     def add_memory(self, user_id: str, text: str, category: str, importance: float) -> dict[str, Any]:
         return with_retry(

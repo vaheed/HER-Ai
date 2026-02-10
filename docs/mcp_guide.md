@@ -24,6 +24,22 @@ The Model Context Protocol is the **perfect replacement** for custom tools becau
 
 ## 🚀 Quick Start
 
+## ✅ Ready-to-use local MCP profile
+
+This repository now ships a free local MCP profile at:
+
+- `config/mcp_servers.local.yaml`
+
+It is designed for out-of-the-box use (no API keys) with:
+- `@modelcontextprotocol/server-filesystem`
+- `mcp-fetch-server`
+- `@modelcontextprotocol/server-memory`
+- `@modelcontextprotocol/server-sequential-thinking`
+- `@modelcontextprotocol/server-pdf`
+
+The `sandbox/Dockerfile` pre-installs these server packages globally so startup is faster
+and agents can use them immediately.
+
 ### 1. Install MCP Python SDK
 
 ```bash

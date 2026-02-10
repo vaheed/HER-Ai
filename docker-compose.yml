@@ -27,7 +27,7 @@ services:
       retries: 3
 
   postgres:
-    image: pgvector/pgvector:pg16
+    image: pgvector/pgvector:pg17
     container_name: her-postgres
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-her}
@@ -45,7 +45,7 @@ services:
       retries: 5
 
   redis:
-    image: redis:7-alpine
+    image: redis:7.4-alpine
     container_name: her-redis
     command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:-changeme456}"]
     volumes:
@@ -62,7 +62,7 @@ services:
       retries: 5
 
   ollama:
-    image: ollama/ollama:0.5.7
+    image: ollama/ollama:latest
     container_name: her-ollama
     volumes:
       - ollama_data:/root/.ollama
@@ -74,30 +74,31 @@ services:
     mem_limit: 2g
     cpus: 1.50
     healthcheck:
-      test: ["CMD", "bash", "-lc", "curl -fsS http://localhost:11434/api/tags >/dev/null"]
+      test: ["CMD", "bash", "-lc", "OLLAMA_HOST=http://localhost:11434 ollama list >/dev/null 2>&1"]
       interval: 30s
       timeout: 5s
       retries: 10
 
   ollama-init:
-    image: ollama/ollama:0.5.7
+    image: ollama/ollama:latest
     container_name: her-ollama-init
     depends_on:
       ollama:
         condition: service_healthy
     environment:
       OLLAMA_BASE_URL: http://ollama:11434
+      OLLAMA_HOST: http://ollama:11434
       OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2:3b}
       OLLAMA_EMBED_MODEL: ${OLLAMA_EMBED_MODEL:-nomic-embed-text}
     entrypoint: ["/bin/bash", "-lc"]
     command: >
       'set -e;
       echo "Waiting for Ollama at $OLLAMA_BASE_URL";
-      until curl -fsS "$OLLAMA_BASE_URL/api/tags" >/dev/null; do sleep 2; done;
+      until OLLAMA_HOST="$OLLAMA_HOST" ollama list >/dev/null 2>&1; do sleep 2; done;
       echo "Pulling embedding model: $OLLAMA_EMBED_MODEL";
-      ollama pull "$OLLAMA_EMBED_MODEL";
+      OLLAMA_HOST="$OLLAMA_HOST" ollama pull "$OLLAMA_EMBED_MODEL";
       echo "Pulling chat model: $OLLAMA_MODEL";
-      ollama pull "$OLLAMA_MODEL";
+      OLLAMA_HOST="$OLLAMA_HOST" ollama pull "$OLLAMA_MODEL";
       echo "Ollama models ready."'
     networks:
       - her-network

@@ -158,22 +158,22 @@ ENVIRONMENT=development
 
 3. **Launch HER**
 ```bash
-docker-compose up -d
+docker compose up -d
 ```
 > **Production tip:** The default `docker-compose.yml` uses published container images, and the app initializes the database schema on first boot, so you can run HER with just the compose file and a `.env` file—no repo build steps required.
 
 4. **Verify Installation**
 ```bash
 # Check all containers are running
-docker-compose ps
+docker compose ps
 
 # View logs
-docker-compose logs -f her-bot
+docker compose logs -f her-bot
 ```
 
 5. **Start Chatting (Telegram)**
 - Make sure your Telegram credentials are set in `.env` (`TELEGRAM_BOT_TOKEN`, `ADMIN_USER_ID`).
-- Restart the service: `docker-compose up -d --force-recreate her-bot`
+- Restart the service: `docker compose up -d --force-recreate her-bot`
 - Open Telegram
 - Message your bot: `/start`
 - Begin your journey with HER
@@ -185,12 +185,12 @@ so OpenAI is optional.
 
 1. Start stack:
 ```bash
-docker-compose up -d
+docker compose up -d
 ```
 
 2. Wait for pre-pull bootstrap to complete:
 ```bash
-docker-compose logs -f ollama-init
+docker compose logs -f ollama-init
 ```
 
 `ollama-init` automatically pulls both models on startup:

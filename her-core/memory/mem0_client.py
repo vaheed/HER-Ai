@@ -16,13 +16,11 @@ class HERMemory:
                     "provider": "pgvector",
                     "config": {
                         "collection_name": "memories",
-                        "connection": {
-                            "db_name": config.postgres_db,
-                            "db_user": config.postgres_user,
-                            "db_password": config.postgres_password,
-                            "db_host": config.postgres_host,
-                            "db_port": config.postgres_port,
-                        },
+                        "host": config.postgres_host,
+                        "port": config.postgres_port,
+                        "db_name": config.postgres_db,
+                        "user": config.postgres_user,
+                        "password": config.postgres_password,
                     },
                 },
                 "llm": {

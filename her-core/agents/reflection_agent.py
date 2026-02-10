@@ -14,6 +14,7 @@ class ReflectionAgent(BaseAgent):
         return self.create_agent(
             role=self._config.get("role", "Memory Curator"),
             goal=self._config.get("goal", "Analyze conversations and store important memories"),
+            backstory=self._config.get("backstory", "You analyze conversations to identify meaningful memories and store only what is useful for long-term continuity."),
             temperature=self._config.get("temperature", 0.3),
         )
 

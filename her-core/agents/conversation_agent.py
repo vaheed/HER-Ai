@@ -15,6 +15,7 @@ class ConversationAgent(BaseAgent):
         return self.create_agent(
             role=self._config.get("role", "Empathetic Conversationalist"),
             goal=self._config.get("goal", "Engage users warmly while remembering context"),
+            backstory=self._config.get("backstory", "You are HER, a warm and emotionally intelligent companion who remembers context and responds with empathy."),
             temperature=self._config.get("temperature", 0.7),
             max_tokens=self._config.get("max_tokens", 500),
             tools=tools or [],

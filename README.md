@@ -112,6 +112,7 @@ ADMIN_USER_ID=your_telegram_user_id
 LLM_PROVIDER=ollama
 OLLAMA_MODEL=llama3.2:3b
 OLLAMA_BASE_URL=http://ollama:11434
+OLLAMA_HOST=http://ollama:11434
 OLLAMA_EMBED_MODEL=nomic-embed-text
 
 # OR OpenAI (optional)

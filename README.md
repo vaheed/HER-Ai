@@ -170,6 +170,14 @@ ERROR: build path /root/her/sandbox either does not exist, is not accessible, or
 ```
 ensure you are using the latest `docker-compose.yml` from this repository. The current compose file runs entirely from published images and does **not** require local build contexts such as `sandbox/`. If you're using an older compose file, update it or remove any `build:` blocks so Docker Compose doesn't try to build from missing paths.
 
+
+### PostgreSQL `database "her" does not exist` log spam
+If your PostgreSQL logs repeatedly show:
+```
+FATAL:  database "her" does not exist
+```
+this usually means a health check or client is connecting without an explicit database name, so PostgreSQL falls back to the username (`her`). Ensure your `.env` uses `POSTGRES_DB=her_memory` (or another existing DB), and restart services after updating env values.
+
 ## 📊 Admin Dashboard
 
 Access the dashboard at `http://localhost:8501`

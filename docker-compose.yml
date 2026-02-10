@@ -35,7 +35,7 @@ services:
       - her-network
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-her}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-her} -d ${POSTGRES_DB:-her_memory}"]
       interval: 10s
       timeout: 5s
       retries: 5

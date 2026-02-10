@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from typing import Final
 
@@ -72,4 +73,6 @@ def run_bot() -> None:
     )
 
     app = build_application(config, memory, metrics)
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    app.run_polling(allowed_updates=Update.ALL_TYPES, close_loop=False)

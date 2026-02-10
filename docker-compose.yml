@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   her-bot:
     image: ghcr.io/vaheed/her-ai/her-bot:latest

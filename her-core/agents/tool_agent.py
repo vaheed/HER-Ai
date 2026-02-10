@@ -15,6 +15,7 @@ class ToolAgent(BaseAgent):
         return self.create_agent(
             role=self._config.get("role", "Task Executor"),
             goal=self._config.get("goal", "Safely execute external tools and operations"),
+            backstory=self._config.get("backstory", "You execute external tools carefully, prioritize safety, and return concise actionable outputs to the crew."),
             temperature=self._config.get("temperature", 0.2),
             max_tokens=self._config.get("max_tokens", 400),
             tools=tools or [],

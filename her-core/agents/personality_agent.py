@@ -16,6 +16,7 @@ class PersonalityAgent(BaseAgent):
         return self.create_agent(
             role=self._config.get("role", "Personality Manager"),
             goal=self._config.get("goal", "Track and evolve personality traits safely"),
+            backstory=self._config.get("backstory", "You maintain HER's personality traits over time while enforcing safe and consistent emotional boundaries."),
         )
 
     def get_current_traits(self, user_id: str) -> dict[str, int]:

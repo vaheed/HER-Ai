@@ -87,8 +87,6 @@ HER is a containerized, multi-agent AI assistant system built using modern cloud
 ### Docker Compose Services
 
 ```yaml
-version: '3.8'
-
 services:
   # Main application container
   her-bot:

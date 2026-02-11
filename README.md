@@ -123,7 +123,7 @@ OPENAI_MODEL=gpt-4o-mini
 
 # OR Groq (optional)
 GROQ_API_KEY=your_groq_api_key
-GROQ_MODEL=llama3-70b-8192
+GROQ_MODEL=llama-3.3-70b-versatile
 GROQ_API_BASE=https://api.groq.com/openai/v1
 
 # Optional: MCP Servers (add any you want to use)
@@ -190,6 +190,7 @@ docker compose logs -f her-bot
 - Restart the service: `docker compose up -d --force-recreate her-bot`
 - Open Telegram
 - Message your bot: `/start`
+- Message your bot normally (for example: `hey, are you there?`) and HER now generates a contextual conversational reply using recent context + memory retrieval, instead of only sending an acknowledgement.
 - Begin your journey with HER
 
 ## 🧠 Local Embeddings (Ollama, low CPU)
@@ -273,6 +274,15 @@ If dependency installation fails with an error involving `pydantic` and `ollama`
 - `ollama==0.3.3`
 
 These pins keep `crewai`, `mem0ai`, `fastapi`, and `langsmith` compatible in the `her-core` environment.
+
+### PostgreSQL `column "id" does not exist` with Groq/Mem0 startup
+If logs show errors like:
+```
+ERROR:  column "id" does not exist
+```
+this usually means an older bootstrap schema created a legacy `memories` table (`memory_id`, `memory_text`) that conflicts with Mem0's pgvector table shape (`id`, `embedding`, etc.).
+
+Latest startup scripts now handle both cases automatically: they rename only the old app table shape to `memories_legacy`, and they also backfill/add an `id` column for older Mem0-style `memories` tables that have `vector`/`payload` but no `id`. Pull latest changes and restart `her-bot` (or rerun DB init) to apply the migration.
 
 ### PostgreSQL `database "her" does not exist` log spam
 If your PostgreSQL logs repeatedly show:

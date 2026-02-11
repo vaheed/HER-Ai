@@ -14,7 +14,7 @@ def build_llm() -> ChatOpenAI:
         )
     if provider == "groq":
         return ChatOpenAI(
-            model=os.getenv("GROQ_MODEL", "llama3-70b-8192"),
+            model=os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"),
             openai_api_key=os.getenv("GROQ_API_KEY"),
             openai_api_base=os.getenv("GROQ_API_BASE", "https://api.groq.com/openai/v1"),
         )

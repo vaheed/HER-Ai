@@ -19,7 +19,7 @@ class AppConfig:
     openai_api_key: str | None = os.getenv("OPENAI_API_KEY")
     openai_model: str = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
     groq_api_key: str | None = os.getenv("GROQ_API_KEY")
-    groq_model: str = os.getenv("GROQ_MODEL", "llama3-70b-8192")
+    groq_model: str = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
     ollama_model: str = os.getenv("OLLAMA_MODEL", "llama3.2:3b")
 
     embedder_provider: str = os.getenv("EMBEDDER_PROVIDER", "ollama")

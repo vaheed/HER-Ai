@@ -334,7 +334,7 @@ tool_agent:
     run code, and manage files. Safety is your priority.
   llm:
     provider: "groq"  # Cheaper model for tool operations
-    model: "llama3-70b-8192"
+    model: "llama-3.3-70b-versatile"
     temperature: 0.1
     max_tokens: 2000
   tools:
@@ -1087,7 +1087,7 @@ class OpenAIProvider(LLMProvider):
         return response.choices[0].message.content
 
 class GroqProvider(LLMProvider):
-    def __init__(self, api_key: str, model: str = "llama3-70b-8192"):
+    def __init__(self, api_key: str, model: str = "llama-3.3-70b-versatile"):
         self.client = groq.Groq(api_key=api_key)
         self.model = model
     
@@ -1112,7 +1112,7 @@ class LLMFactory:
         elif provider_type == "groq":
             return GroqProvider(
                 api_key=os.getenv("GROQ_API_KEY"),
-                model=os.getenv("GROQ_MODEL", "llama3-70b-8192")
+                model=os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
             )
         else:
             raise ValueError(f"Unknown provider: {provider_type}")
@@ -1260,7 +1260,7 @@ OPENAI_API_KEY=sk-...
 OPENAI_MODEL=gpt-4-turbo-preview
 
 GROQ_API_KEY=gsk_...
-GROQ_MODEL=llama3-70b-8192
+GROQ_MODEL=llama-3.3-70b-versatile
 
 # Database
 POSTGRES_USER=her

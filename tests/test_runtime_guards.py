@@ -38,3 +38,19 @@ def test_telegram_generates_agentic_replies_via_llm() -> None:
     assert "memory.search_memories(user_id, message_text, limit=5)" in source
     assert "llm.invoke(" in source
     assert "HER received your message and saved it to memory" not in source
+
+
+def test_startup_uses_personality_manager_for_trait_mutation() -> None:
+    source = Path("her-core/main.py").read_text()
+    assert "personality_manager = PersonalityAgent" in source
+    assert "personality_manager.adjust_trait" in source
+
+
+def test_startup_warmup_is_opt_in_and_disabled_by_default() -> None:
+    main_source = Path("her-core/main.py").read_text()
+    config_source = Path("her-core/config.py").read_text()
+    env_example = Path(".env.example").read_text()
+
+    assert "if config.startup_warmup_enabled" in main_source
+    assert "STARTUP_WARMUP_ENABLED" in config_source
+    assert "STARTUP_WARMUP_ENABLED=false" in env_example

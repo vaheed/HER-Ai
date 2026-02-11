@@ -45,6 +45,7 @@ class AppConfig:
     telegram_admin_user_id: str | None = os.getenv("ADMIN_USER_ID")
     telegram_enabled: bool = _env_bool("TELEGRAM_ENABLED", True)
     telegram_startup_retry_delay_seconds: int = int(os.getenv("TELEGRAM_STARTUP_RETRY_DELAY_SECONDS", "10"))
+    startup_warmup_enabled: bool = _env_bool("STARTUP_WARMUP_ENABLED", False)
 
     log_level: str = os.getenv("LOG_LEVEL", "INFO")
     environment: str = os.getenv("ENVIRONMENT", "development")

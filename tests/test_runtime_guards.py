@@ -54,3 +54,9 @@ def test_startup_warmup_is_opt_in_and_disabled_by_default() -> None:
     assert "if config.startup_warmup_enabled" in main_source
     assert "STARTUP_WARMUP_ENABLED" in config_source
     assert "STARTUP_WARMUP_ENABLED=false" in env_example
+
+def test_telegram_runtime_shutdown_error_exits_cleanly() -> None:
+    source = Path("her-core/telegram_bot.py").read_text()
+    assert "_is_shutdown_network_error" in source
+    assert "Telegram polling stopped during runtime shutdown" in source
+

@@ -183,6 +183,7 @@ docker compose logs -f her-bot
 - Crew orchestration tasks now include explicit `expected_output` metadata so they are compatible with newer CrewAI/Pydantic validation rules.
 - Telegram polling is configured with `stop_signals=None` because the bot runs in a background thread; this avoids `set_wakeup_fd only works in main thread` runtime failures.
 - Telegram startup now retries when Telegram API calls time out (`telegram.error.TimedOut`/`NetworkError`), so transient upstream outages no longer crash `her-bot` startup.
+- Runtime shutdown now handles the Telegram `NetworkError` variant `cannot schedule new futures after shutdown` as a clean stop signal, avoiding noisy stack traces during service/container termination.
 - Startup warm-up checks are now **disabled by default** (`STARTUP_WARMUP_ENABLED=false`) so token-limited providers do not crash `her-bot` during boot; enable only when you explicitly want startup self-tests.
 - You can disable Telegram polling entirely with `TELEGRAM_ENABLED=false` (useful for local core testing without Telegram connectivity).
 

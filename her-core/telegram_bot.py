@@ -21,6 +21,10 @@ WELCOME_MESSAGE: Final[str] = (
 logger = logging.getLogger("her-telegram")
 
 
+def _is_shutdown_network_error(exc: NetworkError) -> bool:
+    return "cannot schedule new futures after shutdown" in str(exc).lower()
+
+
 def _build_user_prompt(user_text: str, context_messages: list[dict[str, str]], related_memories: list[dict[str, object]]) -> str:
     recent_context = "\n".join(
         f"- {item.get('role', 'user')}: {item.get('message', '')}" for item in context_messages[-8:]
@@ -135,6 +139,9 @@ def run_bot() -> None:
             )
             return
         except (TimedOut, NetworkError) as exc:
+            if isinstance(exc, NetworkError) and _is_shutdown_network_error(exc):
+                logger.info("Telegram polling stopped during runtime shutdown; exiting bot loop cleanly.")
+                return
             logger.warning(
                 "Telegram startup failed (%s). Retrying in %s seconds.",
                 exc.__class__.__name__,

@@ -159,9 +159,14 @@ ENVIRONMENT=development
 
 3. **Launch HER**
 ```bash
+# Option A: use published images
+docker compose pull her-bot dashboard sandbox
 docker compose up -d
+
+# Option B: build local source (recommended while developing)
+docker compose up -d --build
 ```
-> **Production tip:** The default `docker-compose.yml` uses published container images, and the app initializes the database schema on first boot, so you can run HER with just the compose file and a `.env` file—no repo build steps required.
+> **Runtime mode tip:** `docker-compose.yml` includes both `image` and `build` for app services, so you can either pull published images or rebuild locally from your checked-out source.
 
 4. **Verify Installation**
 ```bash
@@ -171,6 +176,10 @@ docker compose ps
 # View logs
 docker compose logs -f her-bot
 ```
+
+### Startup Reliability Notes
+- Crew orchestration tasks now include explicit `expected_output` metadata so they are compatible with newer CrewAI/Pydantic validation rules.
+- Telegram polling is configured with `stop_signals=None` because the bot runs in a background thread; this avoids `set_wakeup_fd only works in main thread` runtime failures.
 
 5. **Start Chatting (Telegram)**
 - Make sure your Telegram credentials are set in `.env` (`TELEGRAM_BOT_TOKEN`, `ADMIN_USER_ID`).
@@ -186,7 +195,11 @@ so OpenAI is optional.
 
 1. Start stack:
 ```bash
+# Pull mode
 docker compose up -d
+
+# or local build mode
+docker compose up -d --build
 ```
 
 2. Wait for pre-pull bootstrap to complete:

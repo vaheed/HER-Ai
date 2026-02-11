@@ -12,12 +12,15 @@ def with_retry(
     *,
     attempts: int = 3,
     delay_seconds: float = 0.5,
+    backoff_multiplier: float = 2.0,
+    max_delay_seconds: float = 30.0,
     retry_on: Iterable[type[BaseException]] = (Exception,),
 ) -> Any:
     if attempts < 1:
         raise ValueError("attempts must be >= 1")
 
     last_exc: BaseException | None = None
+    next_delay = max(delay_seconds, 0.0)
     for attempt in range(1, attempts + 1):
         try:
             return func()
@@ -25,6 +28,7 @@ def with_retry(
             last_exc = exc
             if attempt == attempts:
                 break
-            time.sleep(delay_seconds)
+            time.sleep(min(next_delay, max_delay_seconds))
+            next_delay = min(next_delay * backoff_multiplier, max_delay_seconds)
 
     raise RetryError("Operation failed after retries") from last_exc

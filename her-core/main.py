@@ -55,7 +55,8 @@ def main() -> None:
 
     conversation_agent = ConversationAgent(agents_config).build()
     reflection_agent = ReflectionAgent(agents_config).build()
-    personality_agent = PersonalityAgent(agents_config, personality_config).build()
+    personality_manager = PersonalityAgent(agents_config, personality_config)
+    personality_agent = personality_manager.build()
     tool_agent = ToolAgent(agents_config).build()
     CrewOrchestrator().build_crew(
         {
@@ -75,15 +76,15 @@ def main() -> None:
     logger.info("✓ Tool Agent created")
     logger.info("✓ CrewAI coordination ready")
 
-    user_id = "demo-user"
-    memory.update_context(user_id, "Hello HER", "user")
-    memory.add_memory(user_id, "User said hello", "greeting", 0.8)
-    memory.search_memories(user_id, "hello", limit=1)
-    personality_agent.adjust_trait(user_id, "warmth", 1)
-
-    logger.info("✓ Test: Stored memory with embedding")
-    logger.info("✓ Test: Retrieved memory via semantic search")
-    logger.info("✓ Test: Personality trait updated")
+    if config.startup_warmup_enabled:
+        user_id = "demo-user"
+        memory.update_context(user_id, "Hello HER", "user")
+        memory.add_memory(user_id, "User said hello", "greeting", 0.8)
+        memory.search_memories(user_id, "hello", limit=1)
+        personality_manager.adjust_trait(user_id, "warmth", 1)
+        logger.info("✓ Startup warm-up checks completed")
+    else:
+        logger.info("Startup warm-up checks disabled (set STARTUP_WARMUP_ENABLED=true to enable)")
     logger.info("🎉 HER Phase 1 Complete - All systems operational!")
 
     health_thread.join()

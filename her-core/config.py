@@ -6,6 +6,13 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 @dataclass
 class AppConfig:
     llm_provider: str = os.getenv("LLM_PROVIDER", "ollama")
@@ -36,6 +43,8 @@ class AppConfig:
 
     telegram_bot_token: str | None = os.getenv("TELEGRAM_BOT_TOKEN")
     telegram_admin_user_id: str | None = os.getenv("ADMIN_USER_ID")
+    telegram_enabled: bool = _env_bool("TELEGRAM_ENABLED", True)
+    telegram_startup_retry_delay_seconds: int = int(os.getenv("TELEGRAM_STARTUP_RETRY_DELAY_SECONDS", "10"))
 
     log_level: str = os.getenv("LOG_LEVEL", "INFO")
     environment: str = os.getenv("ENVIRONMENT", "development")

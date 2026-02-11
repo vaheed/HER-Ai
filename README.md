@@ -104,8 +104,10 @@ cp .env.example .env
 Required environment variables:
 ```env
 # Telegram
+TELEGRAM_ENABLED=true
 TELEGRAM_BOT_TOKEN=your_telegram_bot_token
 ADMIN_USER_ID=your_telegram_user_id
+TELEGRAM_STARTUP_RETRY_DELAY_SECONDS=10
 
 # LLM Provider (choose one)
 # Local-first (no cloud key required)
@@ -180,6 +182,8 @@ docker compose logs -f her-bot
 ### Startup Reliability Notes
 - Crew orchestration tasks now include explicit `expected_output` metadata so they are compatible with newer CrewAI/Pydantic validation rules.
 - Telegram polling is configured with `stop_signals=None` because the bot runs in a background thread; this avoids `set_wakeup_fd only works in main thread` runtime failures.
+- Telegram startup now retries when Telegram API calls time out (`telegram.error.TimedOut`/`NetworkError`), so transient upstream outages no longer crash `her-bot` startup.
+- You can disable Telegram polling entirely with `TELEGRAM_ENABLED=false` (useful for local core testing without Telegram connectivity).
 
 5. **Start Chatting (Telegram)**
 - Make sure your Telegram credentials are set in `.env` (`TELEGRAM_BOT_TOKEN`, `ADMIN_USER_ID`).

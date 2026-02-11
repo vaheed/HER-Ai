@@ -1,8 +1,10 @@
 import asyncio
 import logging
+import time
 from typing import Final
 
 from telegram import Update
+from telegram.error import NetworkError, TimedOut
 from telegram.constants import ParseMode
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
@@ -72,11 +74,22 @@ def run_bot() -> None:
         password=config.redis_password,
     )
 
-    app = build_application(config, memory, metrics)
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    app.run_polling(
-        allowed_updates=Update.ALL_TYPES,
-        close_loop=False,
-        stop_signals=None,
-    )
+    while True:
+        app = build_application(config, memory, metrics)
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+        try:
+            app.run_polling(
+                allowed_updates=Update.ALL_TYPES,
+                close_loop=False,
+                stop_signals=None,
+            )
+            return
+        except (TimedOut, NetworkError) as exc:
+            logger.warning(
+                "Telegram startup failed (%s). Retrying in %s seconds.",
+                exc.__class__.__name__,
+                config.telegram_startup_retry_delay_seconds,
+            )
+            time.sleep(config.telegram_startup_retry_delay_seconds)

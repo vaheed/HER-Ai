@@ -18,3 +18,15 @@ def test_compose_supports_pull_and_build_for_runtime_services() -> None:
     assert "image" in services["her-bot"] and "build" in services["her-bot"]
     assert "image" in services["dashboard"] and "build" in services["dashboard"]
     assert "image" in services["sandbox"] and "build" in services["sandbox"]
+
+
+def test_telegram_run_polling_retries_on_network_timeouts() -> None:
+    source = Path("her-core/telegram_bot.py").read_text()
+    assert "except (TimedOut, NetworkError)" in source
+    assert "TELEGRAM_STARTUP_RETRY_DELAY_SECONDS" in Path(".env.example").read_text()
+
+
+def test_telegram_can_be_disabled_via_env_flag() -> None:
+    source = Path("her-core/main.py").read_text()
+    assert "config.telegram_enabled and config.telegram_bot_token" in source
+    assert "TELEGRAM_ENABLED" in Path(".env.example").read_text()

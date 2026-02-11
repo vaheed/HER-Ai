@@ -41,10 +41,14 @@ def main() -> None:
     initialize_database(config)
     memory = HERMemory(config, redis_store)
 
-    if config.telegram_bot_token:
+    if config.telegram_enabled and config.telegram_bot_token:
         logger.info("Starting Telegram bot")
         bot_thread = threading.Thread(target=run_bot, daemon=True)
         bot_thread.start()
+    elif not config.telegram_enabled:
+        logger.info("Telegram bot disabled via TELEGRAM_ENABLED=false")
+    else:
+        logger.warning("Telegram bot token is missing; running without Telegram polling")
 
     agents_config = Path("/app/config/agents.yaml")
     personality_config = Path("/app/config/personality.yaml")

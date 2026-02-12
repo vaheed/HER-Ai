@@ -192,6 +192,7 @@ docker compose logs -f her-bot
 - Crew orchestration tasks now include explicit `expected_output` metadata so they are compatible with newer CrewAI/Pydantic validation rules.
 - Telegram polling is configured with `stop_signals=None` because the bot runs in a background thread; this avoids `set_wakeup_fd only works in main thread` runtime failures.
 - Runtime config discovery now checks `HER_CONFIG_DIR`, `/app/config`, and local `./config` paths. In Compose, `/app/config` is backed by the named volume `her_config` and auto-seeded from image defaults on first startup, so users can edit configs persistently without rebuilding images.
+- If `/app/config` is mounted read-only or root-owned in your environment, startup now skips the config seed copy instead of crashing; HER continues by loading defaults from `/app/config.defaults` and repository `./config` fallbacks.
 - Telegram startup now retries when Telegram API calls time out (`telegram.error.TimedOut`/`NetworkError`), so transient upstream outages no longer crash `her-bot` startup.
 - Runtime shutdown now handles the Telegram `NetworkError` variant `cannot schedule new futures after shutdown` as a clean stop signal, avoiding noisy stack traces during service/container termination.
 - Startup warm-up checks are now **disabled by default** (`STARTUP_WARMUP_ENABLED=false`) so token-limited providers do not crash `her-bot` during boot; enable only when you explicitly want startup self-tests.

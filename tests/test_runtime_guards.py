@@ -133,3 +133,15 @@ def test_entrypoint_skips_config_seed_when_runtime_volume_is_readonly() -> None:
     source = Path("her-core/docker-entrypoint.sh").read_text()
     assert 'if [ -w "$RUNTIME_CONFIG_DIR" ]' in source
     assert 'skipping seed copy' in source
+
+
+def test_config_resolution_checks_baked_defaults_before_repo_fallback() -> None:
+    source = Path("her-core/utils/config_paths.py").read_text()
+    assert 'Path("/app/config.defaults") / filename' in source
+    assert 'return Path(__file__).resolve().parents[2] / "config" / filename' in source
+
+
+def test_base_agent_re_resolves_missing_config_paths() -> None:
+    source = Path("her-core/agents/base_agent.py").read_text()
+    assert "resolve_config_file(path.name)" in source
+    assert "Config file '{path.name}' not found." in source

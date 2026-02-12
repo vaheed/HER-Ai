@@ -5,6 +5,7 @@ from typing import Any
 import yaml
 from crewai import Agent
 
+from utils.config_paths import resolve_config_file
 from utils.llm_factory import build_llm
 
 
@@ -24,5 +25,14 @@ class BaseAgent:
 
     @staticmethod
     def _load_config(path: Path) -> dict[str, Any]:
-        with path.open("r", encoding="utf-8") as handle:
+        resolved_path = path
+        if not resolved_path.exists():
+            resolved_path = resolve_config_file(path.name)
+
+        if not resolved_path.exists():
+            raise FileNotFoundError(
+                f"Config file '{path.name}' not found. Tried '{path}' and resolved fallback '{resolved_path}'."
+            )
+
+        with resolved_path.open("r", encoding="utf-8") as handle:
             return yaml.safe_load(handle) or {}

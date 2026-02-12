@@ -10,8 +10,9 @@ def resolve_config_file(filename: str) -> Path:
     Search order:
     1. ``HER_CONFIG_DIR`` environment variable, if set.
     2. ``/app/config`` (container runtime config volume location).
-    3. ``<repo>/config`` relative to this module.
-    4. ``./config`` relative to current working directory.
+    3. ``/app/config.defaults`` (image-baked defaults).
+    4. ``<repo>/config`` relative to this module.
+    5. ``./config`` relative to current working directory.
 
     If no candidate exists, returns the first candidate path as a sensible default.
     """
@@ -25,6 +26,7 @@ def resolve_config_file(filename: str) -> Path:
     candidates.extend(
         [
             Path("/app/config") / filename,
+            Path("/app/config.defaults") / filename,
             Path(__file__).resolve().parents[2] / "config" / filename,
             Path.cwd() / "config" / filename,
         ]
@@ -34,5 +36,6 @@ def resolve_config_file(filename: str) -> Path:
         if path.exists():
             return path
 
-    return candidates[0]
-
+    # Prefer a stable local path for callers that create or inspect configs
+    # when no candidate exists yet.
+    return Path(__file__).resolve().parents[2] / "config" / filename

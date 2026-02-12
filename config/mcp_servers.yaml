@@ -1,0 +1,48 @@
+servers:
+  - name: brave-search
+    enabled: true
+    command: npx
+    args:
+      - -y
+      - "@modelcontextprotocol/server-brave-search"
+    env:
+      BRAVE_API_KEY: "${BRAVE_API_KEY}"
+    description: "Web search for current information"
+
+  - name: filesystem
+    enabled: true
+    command: npx
+    args:
+      - -y
+      - "@modelcontextprotocol/server-filesystem"
+      - /workspace
+    env: {}
+    description: "Read/write files in workspace"
+
+  - name: postgres
+    enabled: true
+    command: npx
+    args:
+      - -y
+      - "@modelcontextprotocol/server-postgres"
+    env:
+      DATABASE_URL: "${POSTGRES_URL}"
+    description: "Query memory database"
+
+  - name: puppeteer
+    enabled: false
+    command: npx
+    args:
+      - -y
+      - "@modelcontextprotocol/server-puppeteer"
+    env: {}
+    description: "Browser automation"
+
+  - name: memory
+    enabled: true
+    command: npx
+    args:
+      - -y
+      - "@modelcontextprotocol/server-memory"
+    env: {}
+    description: "Knowledge graph storage"

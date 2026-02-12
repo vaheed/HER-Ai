@@ -200,6 +200,40 @@ docker compose logs -f her-bot
 - Telegram public mode now supports admin approval (`/approve <user_id>`) and per-minute rate limiting; users can run `/mode` to inspect their access state.
 - If logs show `model requires more system memory ... than is available`, your Ollama chat model is too large for current container RAM; switch to a smaller `OLLAMA_MODEL` (or raise memory limits) to restore long-term memory writes/search quality.
 
+## ✅ Step-by-Step Ability Test (End-to-End)
+
+After startup, use this short sequence to test HER abilities in order:
+
+1. Infrastructure + health
+```bash
+docker compose ps
+curl -sS http://localhost:8000
+```
+
+2. Telegram baseline
+- `/start`
+- `/help`
+- `Hello HER, remember I like jasmine tea.`
+
+3. Admin controls (admin account)
+- `/status`
+- `/personality`
+- `/memories`
+- `/mcp`
+- `/reset`
+
+4. Public-mode safety
+- From a non-admin account, send messages quickly to validate throttling behavior.
+
+5. MCP capability probe
+- Ask: `Search the web for latest AI news and summarize in 3 bullets.`
+- Verify `/mcp` returns server statuses for configured MCP servers.
+
+6. Dashboard
+- Open `http://localhost:8501` and verify app loads with operational panels.
+
+For a complete, copy/paste runbook (including expected outcomes and negative-path checks), see: **`docs/testing_playbook.md`**.
+
 5. **Start Chatting (Telegram)**
 - Make sure your Telegram credentials are set in `.env` (`TELEGRAM_BOT_TOKEN`, `ADMIN_USER_ID`).
 - If `TELEGRAM_PUBLIC_APPROVAL_REQUIRED=true`, admins can approve users with `/approve <user_id>`.
@@ -286,10 +320,13 @@ make sure the bot image is using a Mem0 release that supports pgvector (`mem0ai>
 
 ### Python dependency resolution conflict (`ResolutionImpossible`)
 If dependency installation fails with an error involving `pydantic` and `ollama`, use the pinned core dependency set from this repository. Current compatible pins are:
-- `pydantic==2.7.4`
+- `pydantic==2.12.5`
 - `ollama==0.3.3`
+- `httpx==0.27.2`
+- `python-telegram-bot==21.6`
+- `mcp==1.26.0`
 
-These pins keep `crewai`, `mem0ai`, `fastapi`, and `langsmith` compatible in the `her-core` environment.
+These pins keep `crewai`, `mem0ai`, `mcp`, `ollama`, `groq`, and `langsmith` compatible in the `her-core` environment.
 
 ### PostgreSQL `column "id" does not exist` with Groq/Mem0 startup
 If logs show errors like:
@@ -492,3 +529,30 @@ MIT License - see [LICENSE](LICENSE) for details.
 ---
 
 **Made with ❤️ by developers who believe AI should be warm, not cold**
+
+## Phase 2: Telegram + MCP Integration
+
+> Dependency note: `her-core/requirements.txt` pins `mcp==1.26.0` because `0.9.0` is no longer available on PyPI in current environments.
+> Compatibility note: runtime deps are aligned around `httpx==0.27.2`, `python-telegram-bot==21.6`, and `pydantic==2.12.5` to avoid resolver conflicts with `mcp`/`ollama`/`groq`/`langsmith`. The previous `fastapi` pin was removed because it was unused in HER runtime and conflicted with newer `mcp` transitive requirements.
+
+Phase 2 adds a structured Telegram interface and MCP server orchestration:
+
+- Telegram bot package under `her-core/telegram/` with admin/public command handling and rate limits.
+- MCP management package under `her-core/mcp/` for launching configured MCP servers and exposing curated CrewAI tools.
+- New config files:
+  - `config/mcp_servers.yaml`
+  - `config/telegram.yaml`
+  - `config/rate_limits.yaml`
+
+### New environment variables
+
+- `BRAVE_API_KEY`
+- `POSTGRES_URL`
+
+### MCP startup behavior
+
+On startup, HER now:
+1. Initializes memory.
+2. Starts enabled MCP servers from `config/mcp_servers.yaml`.
+3. Creates curated MCP tools and injects them into the conversation agent.
+4. Starts Telegram polling with admin/public controls.

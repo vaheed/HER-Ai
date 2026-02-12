@@ -3,7 +3,6 @@ langchain-openai==0.0.5
 mem0ai==0.1.117
 cohere==5.13.12
 httpx-sse==0.4.0
-fastapi==0.106.0
 langsmith==0.1.146
 openai>=1.13.3,<2.0.0
 groq==0.4.2
@@ -11,6 +10,9 @@ psycopg2-binary==2.9.9
 redis==5.0.1
 pyyaml==6.0.1
 python-dotenv==1.0.0
-pydantic==2.7.4
+pydantic==2.12.5
 python-telegram-bot==21.6
 ollama==0.3.3
+mcp==1.26.0
+aiohttp==3.9.1
+httpx==0.27.2

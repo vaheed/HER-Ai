@@ -1,0 +1,9 @@
+public_users:
+  messages_per_minute: 5
+  messages_per_hour: 50
+  burst_allowance: 3
+
+admin_users:
+  unlimited: true
+
+rate_limit_message: "You're sending messages too quickly. Please wait a moment."

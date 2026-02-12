@@ -6,9 +6,11 @@ Welcome to the documentation for **HER-Ai**, a personal AI assistant designed fo
 - [Project Repository](https://github.com/vaheed/HER-Ai)
 - [Architecture Overview](architecture.md)
 - [Roadmap](roadmap.md)
+- [Phase 2 Runtime Status](#phase-2-runtime-status)
 - [Phase 1 Build Prompt](phase1_prompt.md)
 - [MCP Integration Guide](mcp_guide.md)
 - [Admin Dashboard](dashboard.md)
+- [Capability Testing Playbook](testing_playbook.md)
 
 ## What is HER-Ai?
 HER-Ai is inspired by the movie **"HER"** and focuses on creating a warm, adaptive, and emotionally intelligent assistant. The system is composed of:
@@ -19,3 +21,19 @@ HER-Ai is inspired by the movie **"HER"** and focuses on creating a warm, adapti
 - **Streamlit Admin Dashboard** for usage metrics and health visibility.
 
 For implementation details, follow the Phase 1 prompt and review the architecture documentation.
+
+For hands-on verification of Telegram, MCP, memory, dashboard, and operational behaviors, use the Capability Testing Playbook.
+
+
+## Phase 2 Runtime Status
+
+Phase 2 scaffolding is now present in the repository:
+
+- Telegram runtime package: `her-core/telegram/`
+- MCP runtime package: `her-core/mcp/`
+- Runtime config files:
+  - `config/telegram.yaml`
+  - `config/rate_limits.yaml`
+  - `config/mcp_servers.yaml`
+
+Use the roadmap for completion tracking and open items; use README for environment and startup commands.

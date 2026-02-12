@@ -2,6 +2,7 @@ import asyncio
 import contextlib
 import logging
 import os
+import shutil
 from pathlib import Path
 from string import Template
 from typing import Any
@@ -36,6 +37,11 @@ class MCPManager:
     def _expand_env(self, value: str) -> str:
         return Template(value).safe_substitute(os.environ)
 
+
+    @staticmethod
+    def _command_exists(command: str) -> bool:
+        return shutil.which(command) is not None
+
     async def initialize(self):
         for server in self.config.get("servers", []):
             name = server.get("name", "unknown")
@@ -46,12 +52,21 @@ class MCPManager:
 
     async def start_server(self, name: str, config: dict):
         try:
+            command = config["command"]
+            if not self._command_exists(command):
+                self.server_status[name] = {
+                    "status": "unavailable",
+                    "message": f"command '{command}' is not installed; install Node.js/npm or disable this MCP server",
+                }
+                logger.warning("Skipping MCP server '%s': missing command '%s'", name, command)
+                return
+
             merged_env = os.environ.copy()
             for key, value in (config.get("env") or {}).items():
                 merged_env[key] = self._expand_env(str(value))
 
             params = StdioServerParameters(
-                command=config["command"],
+                command=command,
                 args=config.get("args", []),
                 env=merged_env,
             )
@@ -69,6 +84,9 @@ class MCPManager:
             self.server_status[name] = {"status": "running", "message": f"{len(tools)} tools loaded"}
             self._stacks[name] = stack
             logger.info("MCP server '%s' started with %s tools", name, len(tools))
+        except asyncio.CancelledError as exc:
+            self.server_status[name] = {"status": "failed", "message": f"startup cancelled: {exc}"}
+            logger.warning("MCP server '%s' startup cancelled: %s", name, exc)
         except Exception as exc:  # noqa: BLE001
             self.server_status[name] = {"status": "failed", "message": str(exc)}
             logger.exception("Failed to start MCP server '%s'", name)

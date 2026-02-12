@@ -1,11 +1,16 @@
 import logging
+from datetime import UTC, datetime
+import json
 from typing import Any
+from urllib.error import URLError
+from urllib.request import urlopen
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from telegram import MessageEntity, Update
 from telegram.ext import ContextTypes
 
 from agents.personality_agent import PersonalityAgent
+from her_mcp.tools import CurlWebSearchTool
 from her_telegram.keyboards import get_admin_menu, get_personality_adjustment
 from her_telegram.rate_limiter import RateLimiter
 from memory.mem0_client import HERMemory
@@ -42,6 +47,7 @@ class MessageHandlers:
         self.group_summary_every_messages = max(5, group_summary_every_messages)
         self.bot_username: str | None = None
         self._llm = build_llm()
+        self._web_search_tool = CurlWebSearchTool()
 
     def is_admin(self, user_id: int) -> bool:
         return user_id in self.admin_user_ids
@@ -49,68 +55,136 @@ class MessageHandlers:
     def set_bot_username(self, username: str | None) -> None:
         self.bot_username = username.lower() if username else None
 
+    async def _reply(self, update: Update, text: str, **kwargs: Any) -> None:
+        message = update.effective_message
+        if not message:
+            logger.warning("No effective message found for reply")
+            return
+        await message.reply_text(text, **kwargs)
+
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
         if self.is_admin(user_id):
-            await update.message.reply_text(self.welcome_message, reply_markup=get_admin_menu())
+            await self._reply(update, self.welcome_message, reply_markup=get_admin_menu())
             return
-        await update.message.reply_text(self.welcome_message)
+        await self._reply(update, self.welcome_message)
 
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
         if self.is_admin(user_id):
-            await update.message.reply_text(
+            await self._reply(
+                update,
                 "Admin commands: /status /personality /memories /reflect /reset /mcp /help",
                 reply_markup=get_admin_menu(),
             )
             return
-        await update.message.reply_text("Public commands: /start /help")
+        await self._reply(update, "Public commands: /start /help")
 
     async def status_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not self.is_admin(update.effective_user.id):
-            await update.message.reply_text("❌ Admin only command")
+            await self._reply(update, "❌ Admin only command")
             return
 
         status_lines = ["📊 HER Status"]
         if self.mcp_manager:
             mcp_status = self.mcp_manager.get_server_status()
             status_lines.append(f"MCP: {mcp_status}")
-        await update.message.reply_text("\n".join(status_lines))
+        await self._reply(update, "\n".join(status_lines))
 
     async def personality_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not self.is_admin(update.effective_user.id):
-            await update.message.reply_text("❌ Admin only command")
+            await self._reply(update, "❌ Admin only command")
             return
-        await update.message.reply_text("Adjust personality traits:", reply_markup=get_personality_adjustment())
+        await self._reply(update, "Adjust personality traits:", reply_markup=get_personality_adjustment())
 
     async def memories_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not self.is_admin(update.effective_user.id):
-            await update.message.reply_text("❌ Admin only command")
+            await self._reply(update, "❌ Admin only command")
             return
 
         user_id = str(update.effective_user.id)
         context_messages = self.memory.get_context(user_id)
-        await update.message.reply_text(f"Recent context entries: {len(context_messages)}")
+        await self._reply(update, f"Recent context entries: {len(context_messages)}")
 
     async def reflect_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not self.is_admin(update.effective_user.id):
-            await update.message.reply_text("❌ Admin only command")
+            await self._reply(update, "❌ Admin only command")
             return
-        await update.message.reply_text("🔄 Reflection triggered (placeholder)")
+        await self._reply(update, "🔄 Reflection triggered (placeholder)")
 
     async def reset_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not self.is_admin(update.effective_user.id):
-            await update.message.reply_text("❌ Admin only command")
+            await self._reply(update, "❌ Admin only command")
             return
         self.rate_limiter.reset_user(update.effective_user.id)
-        await update.message.reply_text("🗑️ Context reset complete (rate-limit bucket reset).")
+        await self._reply(update, "🗑️ Context reset complete (rate-limit bucket reset).")
 
     async def mcp_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not self.is_admin(update.effective_user.id):
-            await update.message.reply_text("❌ Admin only command")
+            await self._reply(update, "❌ Admin only command")
             return
         status = self.mcp_manager.get_server_status() if self.mcp_manager else {"mcp": "not configured"}
-        await update.message.reply_text(f"🔧 MCP status:\n{status}")
+        await self._reply(update, f"🔧 MCP status:\n{status}")
+
+    def _fetch_online_utc_now(self) -> datetime | None:
+        try:
+            with urlopen("https://worldtimeapi.org/api/timezone/Etc/UTC", timeout=10) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+            utc_datetime = payload.get("utc_datetime")
+            if not utc_datetime:
+                return None
+            return datetime.fromisoformat(utc_datetime.replace("Z", "+00:00")).astimezone(UTC)
+        except (URLError, TimeoutError, json.JSONDecodeError, ValueError) as exc:
+            logger.debug("UTC time lookup failed: %s", exc)
+            return None
+
+    def _fetch_btc_price_usd(self) -> float | None:
+        endpoints = [
+            ("https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd", lambda p: p.get("bitcoin", {}).get("usd")),
+            ("https://api.coinbase.com/v2/prices/BTC-USD/spot", lambda p: p.get("data", {}).get("amount")),
+        ]
+        for endpoint, extractor in endpoints:
+            try:
+                with urlopen(endpoint, timeout=10) as response:
+                    payload = json.loads(response.read().decode("utf-8"))
+                usd_price = extractor(payload)
+                if usd_price is not None:
+                    return float(usd_price)
+            except (URLError, TimeoutError, json.JSONDecodeError, ValueError) as exc:
+                logger.debug("BTC price lookup failed for %s: %s", endpoint, exc)
+        return None
+
+    def _maybe_answer_realtime_query(self, message: str) -> str | None:
+        lower_msg = message.lower()
+        online_utc = self._fetch_online_utc_now()
+        now_utc = online_utc or datetime.now(UTC)
+        time_source = "WorldTimeAPI" if online_utc else "system clock"
+
+        date_tokens = {"date", "today", "what day", "which day", "day today"}
+        time_tokens = {"time now", "current time", "what time", "now time", "utc"}
+        asks_date = any(token in lower_msg for token in date_tokens)
+        asks_time = any(token in lower_msg for token in time_tokens)
+
+        if asks_date or asks_time:
+            return (
+                f"Right now (UTC): {now_utc.strftime('%Y-%m-%d %H:%M:%S')}\n"
+                f"Today is {now_utc.strftime('%A, %d %B %Y')} (UTC).\n"
+                f"Source: {time_source}."
+            )
+
+        if any(token in lower_msg for token in {"bitcoin", "btc"}):
+            usd_price = self._fetch_btc_price_usd()
+            if usd_price is not None:
+                return (
+                    f"Live BTC price: ${usd_price:,.2f} USD.\n"
+                    f"Timestamp (UTC): {now_utc.strftime('%Y-%m-%d %H:%M:%S')}"
+                )
+
+            search_result = self._web_search_tool._run("BTC USD price now", max_results=1)
+            if not search_result.lower().startswith("web search failed"):
+                return f"I could not reach pricing APIs, but web search found:\n{search_result}"
+
+        return None
 
     def _is_group_chat(self, update: Update) -> bool:
         chat_type = (update.effective_chat.type or "") if update.effective_chat else ""
@@ -179,12 +253,35 @@ class MessageHandlers:
             logger.debug("Reflection extraction skipped: %s", exc)
             return []
 
+
+    def _build_live_context(self, message: str) -> str:
+        now_utc = datetime.now(UTC)
+        snippets = [f"Current UTC timestamp: {now_utc.isoformat()}"]
+        lower_msg = message.lower()
+
+        if any(token in lower_msg for token in {"bitcoin", "btc"}):
+            usd_price = self._fetch_btc_price_usd()
+            if usd_price is not None:
+                snippets.append(f"Live market data: Bitcoin (BTC) price is about ${usd_price:,.2f} USD.")
+
+        needs_web_search = any(
+            token in lower_msg
+            for token in {"today", "current", "latest", "right now", "price", "news", "internet", "search"}
+        )
+        if needs_web_search:
+            search_result = self._web_search_tool._run(message, max_results=3)
+            if not search_result.lower().startswith("web search failed"):
+                snippets.append(f"Fresh web context:\n{search_result}")
+
+        return "\n".join(snippets)
+
     def _build_reply_prompt(
         self,
         message: str,
         user_context: list[dict[str, Any]],
         group_context: list[dict[str, Any]],
         memories: list[dict[str, Any]],
+        live_context: str,
     ) -> str:
         recent_user = "\n".join(
             f"- {item.get('role', 'user')}: {item.get('message', '')}" for item in user_context[-8:]
@@ -202,6 +299,7 @@ class MessageHandlers:
             f"Recent user context:\n{recent_user}\n\n"
             f"Recent group context:\n{recent_group}\n\n"
             f"Relevant long-term memories:\n{related_memory_text}\n\n"
+            f"Real-time context:\n{live_context}\n\n"
             f"Current user message: {message}"
         )
 
@@ -219,7 +317,7 @@ class MessageHandlers:
         group_key = self._group_memory_key(chat_id)
 
         if not self.is_admin(user_id) and not self.rate_limiter.is_allowed(user_id):
-            await update.message.reply_text("⏱️ Please slow down a bit!")
+            await self._reply(update, "⏱️ Please slow down a bit!")
             return
 
         self.memory.update_context(str(user_id), message, "user")
@@ -244,13 +342,22 @@ class MessageHandlers:
 
         await context.bot.send_chat_action(chat_id=chat_id, action="typing")
 
+        realtime_response = self._maybe_answer_realtime_query(message)
+        if realtime_response:
+            self.memory.update_context(str(user_id), realtime_response, "assistant")
+            if is_group:
+                self.memory.update_context(group_key, f"HER: {realtime_response}", "assistant", max_messages=120)
+            await self._reply(update, realtime_response)
+            return
+
         memories = self.memory.search_memories(str(user_id), message, limit=5)
         if is_group:
             memories.extend(self.memory.search_memories(group_key, message, limit=5))
 
         user_context = self.memory.get_context(str(user_id))
         group_context = self.memory.get_context(group_key) if is_group else []
-        prompt = self._build_reply_prompt(message, user_context, group_context, memories)
+        live_context = self._build_live_context(message)
+        prompt = self._build_reply_prompt(message, user_context, group_context, memories, live_context)
 
         try:
             response_obj = self._llm.invoke(
@@ -270,7 +377,7 @@ class MessageHandlers:
         self.memory.update_context(str(user_id), response, "assistant")
         if is_group:
             self.memory.update_context(group_key, f"HER: {response}", "assistant", max_messages=120)
-        await update.message.reply_text(response)
+        await self._reply(update, response)
 
     async def handle_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query

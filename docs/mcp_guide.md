@@ -579,7 +579,7 @@ import asyncio
 from mcp.manager import get_mcp_manager
 from agents.mcp_tools import MCPToolsIntegration
 from agents.conversation_agent import ConversationAgent
-from telegram.bot import HERBot
+from her_telegram.bot import HERBot
 import logging
 
 logging.basicConfig(level=logging.INFO)

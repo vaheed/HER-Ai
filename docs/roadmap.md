@@ -242,7 +242,7 @@ CREATE INDEX ON memories USING ivfflat (embedding vector_cosine_ops);
 - Rate limiting active
 
 **Implementation Snapshot (current repo):**
-- Telegram package now lives under `her-core/telegram/` with:
+- Telegram package now lives under `her-core/her_telegram/` with:
   - `bot.py` (application lifecycle)
   - `handlers.py` (commands, callbacks, message flow)
   - `keyboards.py` (inline admin UI)

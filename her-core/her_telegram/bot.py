@@ -2,7 +2,7 @@ import logging
 
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, MessageHandler, filters
 
-from telegram.handlers import MessageHandlers
+from her_telegram.handlers import MessageHandlers
 
 logger = logging.getLogger(__name__)
 

@@ -6,8 +6,8 @@ from telegram.ext import ContextTypes
 
 from agents.personality_agent import PersonalityAgent
 from memory.mem0_client import HERMemory
-from telegram.keyboards import get_admin_menu, get_personality_adjustment
-from telegram.rate_limiter import RateLimiter
+from her_telegram.keyboards import get_admin_menu, get_personality_adjustment
+from her_telegram.rate_limiter import RateLimiter
 
 logger = logging.getLogger(__name__)
 

@@ -30,7 +30,7 @@ For hands-on verification of Telegram, MCP, memory, dashboard, and operational b
 Phase 2 scaffolding is now present in the repository:
 
 - Telegram runtime package: `her-core/telegram/`
-- MCP runtime package: `her-core/mcp/`
+- MCP runtime package: `her-core/her_mcp/`
 - Runtime config files:
   - `config/telegram.yaml`
   - `config/rate_limits.yaml`

@@ -205,7 +205,7 @@ CREATE INDEX ON memories USING ivfflat (embedding vector_cosine_ops);
 ---
 
 ### Phase 2: Telegram Integration & Sandbox Tools (Weeks 4-5)
-**Status**: 🚧 In Progress (Core scaffolding merged)  
+**Status**: 🚧 In Progress (Core runtime implemented; external MCP integration validation pending)  
 **Priority**: High
 
 #### 2.1 Telegram Bot Development (Week 4)
@@ -230,10 +230,10 @@ CREATE INDEX ON memories USING ivfflat (embedding vector_cosine_ops);
   - `/help` - Show commands
 - [x] Implement message handling pipeline
 - [x] Add conversation state tracking
-- [ ] Create public mode approval system
+- [x] Create public mode approval system
 - [x] Implement rate limiting for public users
 - [x] Add inline keyboard interactions
-- [ ] Build full error message formatting + retry UX
+- [x] Build full error message formatting + retry UX
 
 **Deliverables:**
 - Functional Telegram bot
@@ -328,7 +328,7 @@ class HERBot:
 - Admin controls for MCP
 
 **Implementation Snapshot (current repo):**
-- MCP package now lives under `her-core/mcp/` with:
+- MCP package now lives under `her-core/her_mcp/` with:
   - `manager.py` (`MCPManager` lifecycle, tool listing, calls, status)
   - `tools.py` (CrewAI tool bridge)
   - `helpers.py` (quick helper wrappers)

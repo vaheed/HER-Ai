@@ -29,25 +29,27 @@ The Model Context Protocol is the **perfect replacement** for custom tools becau
 
 The repository currently includes a concrete MCP implementation used by startup wiring:
 
-- `her-core/mcp/manager.py`
+- `web_search` uses a curl-based no-key search flow (DuckDuckGo instant API) for simple lookups, while Brave MCP remains optional.
+
+- `her-core/her_mcp/manager.py`
   - Loads `config/mcp_servers.yaml`
   - Starts enabled MCP servers
   - Caches tool metadata
   - Exposes `call_tool()`, `get_all_tools()`, and `get_server_status()`
-- `her-core/mcp/tools.py`
+- `her-core/her_mcp/tools.py`
   - Wraps curated MCP actions as CrewAI tools (`web_search`, `read_file`, `write_file`, `query_database`, optional `navigate_browser`)
-- `her-core/mcp/helpers.py`
+- `her-core/her_mcp/helpers.py`
   - Async convenience wrappers for web/file operations
 - `her-core/main.py`
   - Initializes MCP manager at startup and injects curated tools into the conversation agent
 
 Default MCP profile in this repo: `config/mcp_servers.yaml`
 
-- Enabled by default: `brave-search`, `filesystem`, `postgres`, `memory`
+- Enabled by default: `filesystem`, `postgres`, `memory` (and `brave-search` is optional)
 - Disabled by default: `puppeteer`
 
 Required environment variables for this profile are documented in `.env.example`:
-`BRAVE_API_KEY`, `POSTGRES_URL`.
+`POSTGRES_URL` (`BRAVE_API_KEY` only if enabling `brave-search`).
 
 ## ✅ Ready-to-use local MCP profile
 
@@ -131,7 +133,7 @@ servers:
 ### 3. Implement MCP Manager
 
 ```python
-# her-core/mcp/manager.py
+# her-core/her_mcp/manager.py
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client

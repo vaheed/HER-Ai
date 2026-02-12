@@ -115,3 +115,15 @@ def test_openrouter_provider_is_supported_for_chat_and_memory() -> None:
     assert 'OPENROUTER_API_BASE' in env_example
     assert 'openrouter_api_key' in config_source
     assert 'if config.llm_provider == "openrouter"' in mem_source
+
+
+def test_web_search_uses_no_key_curl_fallback() -> None:
+    tools_source = Path("her-core/her_mcp/tools.py").read_text()
+    helpers_source = Path("her-core/her_mcp/helpers.py").read_text()
+
+    assert "class CurlWebSearchTool" in tools_source
+    assert "api.duckduckgo.com" in tools_source
+    assert "subprocess.run(" in tools_source
+    assert "CurlWebSearchTool()" in tools_source
+    assert 'tool_name="brave_web_search"' not in tools_source
+    assert "api.duckduckgo.com" in helpers_source

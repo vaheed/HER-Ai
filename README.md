@@ -288,6 +288,8 @@ For container builds that use `sandbox/` as Docker context, this profile is mirr
 
 The sandbox image installs these MCP packages ahead-of-time so they are ready to use.
 
+Additionally, the default `web_search` tool in `her-core/her_mcp/tools.py` now uses system `curl` with DuckDuckGo (no API key required) for simple internet search.
+
 Package mapping:
 - `filesystem` -> `@modelcontextprotocol/server-filesystem`
 - `fetch` -> `mcp-fetch-server`

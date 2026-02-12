@@ -530,27 +530,6 @@ MIT License - see [LICENSE](LICENSE) for details.
 
 **Made with ❤️ by developers who believe AI should be warm, not cold**
 
-## Phase 2: Telegram + MCP Integration
-
-> Dependency note: `her-core/requirements.txt` pins `mcp==1.26.0` because `0.9.0` is no longer available on PyPI in current environments.
-> Compatibility note: runtime deps are aligned around `httpx==0.27.2`, `python-telegram-bot==21.6`, and `pydantic==2.12.5` to avoid resolver conflicts with `mcp`/`ollama`/`groq`/`langsmith`. The previous `fastapi` pin was removed because it was unused in HER runtime and conflicted with newer `mcp` transitive requirements.
-
-Phase 2 adds a structured Telegram interface and MCP server orchestration:
-
-- Telegram bot package under `her-core/telegram/` with admin/public command handling and rate limits.
-- MCP management package under `her-core/mcp/` for launching configured MCP servers and exposing curated CrewAI tools.
-- New config files:
-  - `config/mcp_servers.yaml`
-  - `config/telegram.yaml`
-  - `config/rate_limits.yaml`
-
-### New environment variables
-
-- `BRAVE_API_KEY`
-- `POSTGRES_URL`
-
-### MCP startup behavior
-
 On startup, HER now:
 1. Initializes memory.
 2. Starts enabled MCP servers from `config/mcp_servers.yaml`.

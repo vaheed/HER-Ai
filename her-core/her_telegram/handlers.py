@@ -1,13 +1,15 @@
 import logging
 from typing import Any
 
-from telegram import Update
+from langchain_core.messages import HumanMessage, SystemMessage
+from telegram import MessageEntity, Update
 from telegram.ext import ContextTypes
 
 from agents.personality_agent import PersonalityAgent
-from memory.mem0_client import HERMemory
 from her_telegram.keyboards import get_admin_menu, get_personality_adjustment
 from her_telegram.rate_limiter import RateLimiter
+from memory.mem0_client import HERMemory
+from utils.llm_factory import build_llm
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +27,8 @@ class MessageHandlers:
         mcp_manager: Any | None = None,
         reflection_agent: Any | None = None,
         welcome_message: str = "Hi! I'm HER, your AI companion. How can I help you today?",
+        group_reply_on_mention_only: bool = True,
+        group_summary_every_messages: int = 25,
     ):
         self.conversation_agent = conversation_agent
         self.memory = memory
@@ -34,9 +38,16 @@ class MessageHandlers:
         self.mcp_manager = mcp_manager
         self.reflection_agent = reflection_agent
         self.welcome_message = welcome_message
+        self.group_reply_on_mention_only = group_reply_on_mention_only
+        self.group_summary_every_messages = max(5, group_summary_every_messages)
+        self.bot_username: str | None = None
+        self._llm = build_llm()
 
     def is_admin(self, user_id: int) -> bool:
         return user_id in self.admin_user_ids
+
+    def set_bot_username(self, username: str | None) -> None:
+        self.bot_username = username.lower() if username else None
 
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
@@ -101,19 +112,164 @@ class MessageHandlers:
         status = self.mcp_manager.get_server_status() if self.mcp_manager else {"mcp": "not configured"}
         await update.message.reply_text(f"🔧 MCP status:\n{status}")
 
+    def _is_group_chat(self, update: Update) -> bool:
+        chat_type = (update.effective_chat.type or "") if update.effective_chat else ""
+        return chat_type in {"group", "supergroup"}
+
+    def _group_memory_key(self, chat_id: int) -> str:
+        return f"group:{chat_id}"
+
+    def _message_mentions_bot(self, update: Update) -> bool:
+        message = update.message
+        if not message:
+            return False
+
+        if message.reply_to_message and message.reply_to_message.from_user and message.reply_to_message.from_user.is_bot:
+            return True
+
+        text = message.text or ""
+        entities = message.entities or []
+        for entity in entities:
+            if entity.type in {MessageEntity.MENTION, MessageEntity.TEXT_MENTION}:
+                mention_text = text[entity.offset : entity.offset + entity.length].lower()
+                if self.bot_username and self.bot_username in mention_text:
+                    return True
+
+        if self.bot_username and f"@{self.bot_username}" in text.lower():
+            return True
+
+        return False
+
+    async def _summarize_group_if_needed(self, chat_id: int) -> None:
+        group_key = self._group_memory_key(chat_id)
+        context_messages = self.memory.get_context(group_key)
+        if not context_messages:
+            return
+        if len(context_messages) % self.group_summary_every_messages != 0:
+            return
+
+        recent = context_messages[-self.group_summary_every_messages :]
+        transcript = "\n".join(f"- {item.get('role')}: {item.get('message')}" for item in recent)
+        prompt = (
+            "Summarize this group chat snippet for long-term memory. "
+            "Return 3-5 bullet points with durable preferences, commitments, important decisions, and names."
+            " Skip small talk."
+            f"\n\n{transcript}"
+        )
+
+        try:
+            summary = self._llm.invoke(
+                [
+                    SystemMessage(content="You extract durable memory summaries from chats."),
+                    HumanMessage(content=prompt),
+                ]
+            )
+            summary_text = (summary.content or "").strip() if summary else ""
+            if summary_text:
+                self.memory.add_memory(group_key, summary_text, "group_summary", 0.9)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Failed to summarize group chat %s: %s", chat_id, exc)
+
+    def _extract_memories_from_message(self, text: str) -> list[dict[str, Any]]:
+        if not self.reflection_agent:
+            return []
+        try:
+            return self.reflection_agent.analyze_conversation([{"role": "user", "message": text}])
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Reflection extraction skipped: %s", exc)
+            return []
+
+    def _build_reply_prompt(
+        self,
+        message: str,
+        user_context: list[dict[str, Any]],
+        group_context: list[dict[str, Any]],
+        memories: list[dict[str, Any]],
+    ) -> str:
+        recent_user = "\n".join(
+            f"- {item.get('role', 'user')}: {item.get('message', '')}" for item in user_context[-8:]
+        ) or "(none)"
+        recent_group = "\n".join(
+            f"- {item.get('role', 'user')}: {item.get('message', '')}" for item in group_context[-8:]
+        ) or "(none)"
+        related_memory_text = "\n".join(
+            f"- {m.get('memory') or m.get('text') or m.get('data') or m}" for m in memories[:5]
+        ) or "(none)"
+
+        return (
+            "You are HER, a warm emotionally intelligent assistant in Telegram. "
+            "Answer naturally and concisely.\n\n"
+            f"Recent user context:\n{recent_user}\n\n"
+            f"Recent group context:\n{recent_group}\n\n"
+            f"Relevant long-term memories:\n{related_memory_text}\n\n"
+            f"Current user message: {message}"
+        )
+
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not update.message or not update.effective_user:
+            return
+
         user_id = update.effective_user.id
-        message = update.message.text
+        chat_id = update.effective_chat.id
+        message = (update.message.text or "").strip()
+        if not message:
+            return
+
+        is_group = self._is_group_chat(update)
+        group_key = self._group_memory_key(chat_id)
 
         if not self.is_admin(user_id) and not self.rate_limiter.is_allowed(user_id):
             await update.message.reply_text("⏱️ Please slow down a bit!")
             return
 
-        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
-
         self.memory.update_context(str(user_id), message, "user")
-        response = f"I heard you: {message}"
+
+        if is_group:
+            self.memory.update_context(group_key, f"{update.effective_user.full_name}: {message}", "user", max_messages=120)
+
+        for extracted in self._extract_memories_from_message(message):
+            self.memory.add_memory(str(user_id), extracted["text"], extracted["category"], extracted["importance"])
+            if is_group:
+                self.memory.add_memory(group_key, extracted["text"], "group_signal", extracted["importance"])
+
+        if is_group:
+            await self._summarize_group_if_needed(chat_id)
+
+        should_reply = True
+        if is_group and self.group_reply_on_mention_only:
+            should_reply = self._message_mentions_bot(update)
+
+        if not should_reply:
+            return
+
+        await context.bot.send_chat_action(chat_id=chat_id, action="typing")
+
+        memories = self.memory.search_memories(str(user_id), message, limit=5)
+        if is_group:
+            memories.extend(self.memory.search_memories(group_key, message, limit=5))
+
+        user_context = self.memory.get_context(str(user_id))
+        group_context = self.memory.get_context(group_key) if is_group else []
+        prompt = self._build_reply_prompt(message, user_context, group_context, memories)
+
+        try:
+            response_obj = self._llm.invoke(
+                [
+                    SystemMessage(content="You are HER. Warm, empathetic, practical, concise."),
+                    HumanMessage(content=prompt),
+                ]
+            )
+            response = (response_obj.content or "").strip() if response_obj else ""
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Failed to generate response for user %s: %s", user_id, exc)
+            response = "I am here with you — I had a temporary issue generating a full reply."
+
+        if not response:
+            response = "I am here with you. Tell me a little more and I will help."
+
         self.memory.update_context(str(user_id), response, "assistant")
+        if is_group:
+            self.memory.update_context(group_key, f"HER: {response}", "assistant", max_messages=120)
         await update.message.reply_text(response)
 
     async def handle_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):

@@ -529,6 +529,8 @@ MIT License - see [LICENSE](LICENSE) for details.
 
 ## Phase 2: Telegram + MCP Integration
 
+> Dependency note: `her-core/requirements.txt` pins `mcp==1.26.0` because `0.9.0` is no longer available on PyPI in current environments.
+
 Phase 2 adds a structured Telegram interface and MCP server orchestration:
 
 - Telegram bot package under `her-core/telegram/` with admin/public command handling and rate limits.

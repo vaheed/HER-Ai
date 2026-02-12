@@ -14,5 +14,5 @@ python-dotenv==1.0.0
 pydantic==2.7.4
 python-telegram-bot==20.7
 ollama==0.3.3
-mcp==0.9.0
+mcp==1.26.0
 aiohttp==3.9.1

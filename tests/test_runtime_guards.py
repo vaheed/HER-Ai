@@ -32,6 +32,20 @@ def test_telegram_can_be_disabled_via_env_flag() -> None:
     assert "TELEGRAM_ENABLED" in Path(".env.example").read_text()
 
 
+def test_telegram_public_mode_controls_are_configured() -> None:
+    source = Path("her-core/telegram_bot.py").read_text()
+    config_source = Path("her-core/config.py").read_text()
+    env_example = Path(".env.example").read_text()
+
+    assert "TelegramAccessController" in source
+    assert "CommandHandler(\"approve\"" in source
+    assert "CommandHandler(\"mode\"" in source
+    assert "telegram_public_approval_required" in config_source
+    assert "telegram_public_rate_limit_per_minute" in config_source
+    assert "TELEGRAM_PUBLIC_APPROVAL_REQUIRED=true" in env_example
+    assert "TELEGRAM_PUBLIC_RATE_LIMIT_PER_MINUTE=20" in env_example
+
+
 def test_telegram_generates_agentic_replies_via_llm() -> None:
     source = Path("her-core/telegram_bot.py").read_text()
     assert "llm = build_llm()" in source

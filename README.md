@@ -108,6 +108,8 @@ TELEGRAM_ENABLED=true
 TELEGRAM_BOT_TOKEN=your_telegram_bot_token
 ADMIN_USER_ID=your_telegram_user_id
 TELEGRAM_STARTUP_RETRY_DELAY_SECONDS=10
+TELEGRAM_PUBLIC_APPROVAL_REQUIRED=true
+TELEGRAM_PUBLIC_RATE_LIMIT_PER_MINUTE=20
 
 # LLM Provider (choose one)
 # Local-first (no cloud key required)
@@ -195,10 +197,12 @@ docker compose logs -f her-bot
 - You can disable Telegram polling entirely with `TELEGRAM_ENABLED=false` (useful for local core testing without Telegram connectivity).
 - Long-term memory writes/searches now fail open by default (`MEMORY_STRICT_MODE=false`): if Mem0/LLM memory operations fail (for example low-RAM Ollama errors), HER logs a warning, keeps short-term Redis context, and still replies to users. Set `MEMORY_STRICT_MODE=true` to restore fail-fast behavior.
 - Telegram chat replies now automatically retry transient LLM API failures (rate limits/timeouts/connection blips) and return a friendly retry-wait message instead of a stack trace when provider token limits are hit.
+- Telegram public mode now supports admin approval (`/approve <user_id>`) and per-minute rate limiting; users can run `/mode` to inspect their access state.
 - If logs show `model requires more system memory ... than is available`, your Ollama chat model is too large for current container RAM; switch to a smaller `OLLAMA_MODEL` (or raise memory limits) to restore long-term memory writes/search quality.
 
 5. **Start Chatting (Telegram)**
 - Make sure your Telegram credentials are set in `.env` (`TELEGRAM_BOT_TOKEN`, `ADMIN_USER_ID`).
+- If `TELEGRAM_PUBLIC_APPROVAL_REQUIRED=true`, admins can approve users with `/approve <user_id>`.
 - Restart the service: `docker compose up -d --force-recreate her-bot`
 - Open Telegram
 - Message your bot: `/start`
@@ -447,6 +451,11 @@ HER: With the weather looking nice this weekend, are you planning
 ## 📦 Build & Publish (GitHub Container Registry)
 
 The Docker Compose file is wired to GHCR images for `her-bot`, `her-dashboard`, and `her-sandbox`.
+
+**Automated tags via GitHub Actions (`.github/workflows/ci.yml`):**
+- push to `main`: publishes `latest` + `sha-*` tags
+- push tag like `v0.0.1`: publishes `v0.0.1` and `0.0.1` tags (+ `sha-*`)
+- publish a GitHub Release with tag `v0.0.1`: also publishes matching image tags
 
 ```bash
 # Build images

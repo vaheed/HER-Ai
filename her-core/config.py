@@ -1,5 +1,5 @@
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from dotenv import load_dotenv
 
@@ -11,6 +11,11 @@ def _env_bool(name: str, default: bool) -> bool:
     if value is None:
         return default
     return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_csv(name: str) -> list[str]:
+    value = os.getenv(name, "")
+    return [item.strip() for item in value.split(",") if item.strip()]
 
 
 @dataclass
@@ -47,6 +52,9 @@ class AppConfig:
 
     telegram_bot_token: str | None = os.getenv("TELEGRAM_BOT_TOKEN")
     telegram_admin_user_id: str | None = os.getenv("ADMIN_USER_ID")
+    telegram_admin_user_ids: list[str] = field(default_factory=lambda: _env_csv("ADMIN_USER_ID"))
+    telegram_public_approval_required: bool = _env_bool("TELEGRAM_PUBLIC_APPROVAL_REQUIRED", True)
+    telegram_public_rate_limit_per_minute: int = int(os.getenv("TELEGRAM_PUBLIC_RATE_LIMIT_PER_MINUTE", "20"))
     telegram_enabled: bool = _env_bool("TELEGRAM_ENABLED", True)
     telegram_startup_retry_delay_seconds: int = int(os.getenv("TELEGRAM_STARTUP_RETRY_DELAY_SECONDS", "10"))
     startup_warmup_enabled: bool = _env_bool("STARTUP_WARMUP_ENABLED", False)

@@ -15,6 +15,7 @@ from memory import HERMemory, RedisContextStore, initialize_database
 from utils.llm_factory import build_llm
 from utils.metrics import HERMetrics
 from utils.retry import RetryError, with_retry
+from utils.telegram_access import TelegramAccessController
 
 WELCOME_MESSAGE: Final[str] = (
     "Hi! I'm HER ✨\n"
@@ -67,9 +68,51 @@ def build_application(config: AppConfig, memory: HERMemory, metrics: HERMetrics)
     if not config.telegram_bot_token:
         raise ValueError("TELEGRAM_BOT_TOKEN is required to start the Telegram bot.")
 
+    access = TelegramAccessController(
+        host=config.redis_host,
+        port=config.redis_port,
+        password=config.redis_password,
+        admin_user_ids=set(config.telegram_admin_user_ids),
+        approval_required=config.telegram_public_approval_required,
+        public_rate_limit_per_minute=config.telegram_public_rate_limit_per_minute,
+    )
+
     async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if update.message:
             await update.message.reply_text(WELCOME_MESSAGE)
+
+    async def approve(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not update.message or not update.effective_user:
+            return
+
+        admin_id = str(update.effective_user.id)
+        if not access.is_admin(admin_id):
+            await update.message.reply_text("Only admins can approve users.")
+            return
+
+        if not context.args:
+            await update.message.reply_text("Usage: /approve <telegram_user_id>")
+            return
+
+        target_user_id = context.args[0].strip()
+        access.approve_user(target_user_id)
+        await update.message.reply_text(f"Approved user `{target_user_id}` for public chat access.", parse_mode="Markdown")
+
+    async def mode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not update.message or not update.effective_user:
+            return
+
+        user_id = str(update.effective_user.id)
+        role = "admin" if access.is_admin(user_id) else "public"
+        approved = access.is_approved(user_id)
+        await update.message.reply_text(
+            (
+                f"Mode: {role}\n"
+                f"Approved: {'yes' if approved else 'no'}\n"
+                f"Public approval required: {'yes' if config.telegram_public_approval_required else 'no'}\n"
+                f"Public rate limit: {config.telegram_public_rate_limit_per_minute} msg/min"
+            )
+        )
 
     async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not update.message:
@@ -80,6 +123,19 @@ def build_application(config: AppConfig, memory: HERMemory, metrics: HERMetrics)
         message_text = (update.message.text or "").strip()
         if not message_text:
             await update.message.reply_text("I didn't catch that. Could you send your message again?")
+            return
+
+        can_send, reason = access.can_send_message(user_id)
+        if not can_send and reason == "not_approved":
+            await update.message.reply_text(
+                "You're in public mode and need admin approval before we can chat. "
+                "Ask an admin to run /approve <your_telegram_user_id>."
+            )
+            return
+        if not can_send and reason == "rate_limited":
+            await update.message.reply_text(
+                "You're sending messages too quickly right now. Please wait a minute and try again."
+            )
             return
 
         memory.update_context(user_id, message_text, "user")
@@ -137,6 +193,8 @@ def build_application(config: AppConfig, memory: HERMemory, metrics: HERMetrics)
 
     application = Application.builder().token(config.telegram_bot_token).build()
     application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("approve", approve))
+    application.add_handler(CommandHandler("mode", mode))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     return application

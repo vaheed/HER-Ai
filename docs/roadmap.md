@@ -205,7 +205,7 @@ CREATE INDEX ON memories USING ivfflat (embedding vector_cosine_ops);
 ---
 
 ### Phase 2: Telegram Integration & Sandbox Tools (Weeks 4-5)
-**Status**: 🔜 Upcoming  
+**Status**: 🚧 In Progress  
 **Priority**: High
 
 #### 2.1 Telegram Bot Development (Week 4)
@@ -216,9 +216,9 @@ CREATE INDEX ON memories USING ivfflat (embedding vector_cosine_ops);
 - Add conversation state management
 
 **Tasks:**
-- [ ] Set up python-telegram-bot library
-- [ ] Implement bot initialization and authentication
-- [ ] Create admin mode detection (whitelist user IDs)
+- [x] Set up python-telegram-bot library
+- [x] Implement bot initialization and authentication
+- [x] Create admin mode detection (whitelist user IDs)
 - [ ] Build command handlers:
   - `/start` - Initialize conversation
   - `/status` - Show HER's state (admin)
@@ -227,10 +227,10 @@ CREATE INDEX ON memories USING ivfflat (embedding vector_cosine_ops);
   - `/reflect` - Trigger reflection (admin)
   - `/reset` - Clear context (admin)
   - `/help` - Show commands
-- [ ] Implement message handling pipeline
-- [ ] Add conversation state tracking
-- [ ] Create public mode approval system
-- [ ] Implement rate limiting for public users
+- [x] Implement message handling pipeline
+- [x] Add conversation state tracking
+- [x] Create public mode approval system
+- [x] Implement rate limiting for public users
 - [ ] Add inline keyboard interactions
 - [ ] Build error message formatting
 

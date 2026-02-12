@@ -51,6 +51,7 @@ class MCPManager:
             await self.start_server(name, server)
 
     async def start_server(self, name: str, config: dict):
+        stack: contextlib.AsyncExitStack | None = None
         try:
             command = config["command"]
             if not self._command_exists(command):
@@ -87,9 +88,16 @@ class MCPManager:
         except asyncio.CancelledError as exc:
             self.server_status[name] = {"status": "failed", "message": f"startup cancelled: {exc}"}
             logger.warning("MCP server '%s' startup cancelled: %s", name, exc)
+            if stack is not None:
+                with contextlib.suppress(Exception):
+                    await stack.aclose()
+            raise
         except Exception as exc:  # noqa: BLE001
             self.server_status[name] = {"status": "failed", "message": str(exc)}
             logger.exception("Failed to start MCP server '%s'", name)
+            if stack is not None:
+                with contextlib.suppress(Exception):
+                    await stack.aclose()
 
     @staticmethod
     def _tool_to_dict(tool: Any) -> dict[str, Any]:

@@ -145,3 +145,10 @@ def test_base_agent_re_resolves_missing_config_paths() -> None:
     source = Path("her-core/agents/base_agent.py").read_text()
     assert "resolve_config_file(path.name)" in source
     assert "Config file '{path.name}' not found." in source
+
+
+def test_mcp_startup_cancellation_re_raises_and_cleans_up_stack() -> None:
+    source = Path("her-core/her_mcp/manager.py").read_text()
+    assert "except asyncio.CancelledError as exc" in source
+    assert "await stack.aclose()" in source
+    assert "raise" in source

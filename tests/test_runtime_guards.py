@@ -127,3 +127,9 @@ def test_web_search_uses_no_key_curl_fallback() -> None:
     assert "CurlWebSearchTool()" in tools_source
     assert 'tool_name="brave_web_search"' not in tools_source
     assert "api.duckduckgo.com" in helpers_source
+
+
+def test_entrypoint_skips_config_seed_when_runtime_volume_is_readonly() -> None:
+    source = Path("her-core/docker-entrypoint.sh").read_text()
+    assert 'if [ -w "$RUNTIME_CONFIG_DIR" ]' in source
+    assert 'skipping seed copy' in source

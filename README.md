@@ -140,6 +140,8 @@ SLACK_BOT_TOKEN=your_slack_bot_token
 # Memory / Embeddings
 MEMORY_VECTOR_PROVIDER=pgvector
 MEMORY_COLLECTION_NAME=memories
+# Keep bot responsive if Mem0/Ollama memory writes fail under low RAM
+MEMORY_STRICT_MODE=false
 
 # Local-first embeddings (low CPU)
 EMBEDDER_PROVIDER=ollama
@@ -186,6 +188,7 @@ docker compose logs -f her-bot
 - Runtime shutdown now handles the Telegram `NetworkError` variant `cannot schedule new futures after shutdown` as a clean stop signal, avoiding noisy stack traces during service/container termination.
 - Startup warm-up checks are now **disabled by default** (`STARTUP_WARMUP_ENABLED=false`) so token-limited providers do not crash `her-bot` during boot; enable only when you explicitly want startup self-tests.
 - You can disable Telegram polling entirely with `TELEGRAM_ENABLED=false` (useful for local core testing without Telegram connectivity).
+- Long-term memory writes/searches now fail open by default (`MEMORY_STRICT_MODE=false`): if Mem0/LLM memory operations fail (for example low-RAM Ollama errors), HER logs a warning, keeps short-term Redis context, and still replies to users. Set `MEMORY_STRICT_MODE=true` to restore fail-fast behavior.
 
 5. **Start Chatting (Telegram)**
 - Make sure your Telegram credentials are set in `.env` (`TELEGRAM_BOT_TOKEN`, `ADMIN_USER_ID`).

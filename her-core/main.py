@@ -10,8 +10,8 @@ from dotenv import load_dotenv
 
 from agents import ConversationAgent, PersonalityAgent, ReflectionAgent
 from config import AppConfig
-from mcp.manager import MCPManager
-from mcp.tools import MCPToolsIntegration
+from her_mcp.manager import MCPManager
+from her_mcp.tools import MCPToolsIntegration
 from memory import HERMemory, RedisContextStore, initialize_database
 from telegram.bot import HERBot
 from telegram.rate_limiter import RateLimiter

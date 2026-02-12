@@ -1,4 +1,4 @@
-crewai==0.28.0
+crewai==0.79.4
 langchain-openai==0.0.5
 mem0ai==0.1.117
 cohere==5.13.12

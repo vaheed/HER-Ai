@@ -42,7 +42,7 @@ services:
     - REDIS_PASSWORD
     - BRAVE_API_KEY
     volumes:
-    - ./config:/app/config
+    - her_config:/app/config
     - ./logs:/app/logs
     - /var/run/docker.sock:/var/run/docker.sock
     - workspace:/workspace
@@ -200,3 +200,4 @@ volumes:
   sandbox_workspace: null
   ollama_data: null
   workspace: null
+  her_config: null

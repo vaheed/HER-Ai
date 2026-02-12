@@ -21,3 +21,5 @@ bot:
     public_mode_enabled: true
     approval_required: false
     welcome_message: "Hi! I'm HER, your AI companion. How can I help you today?"
+    group_reply_on_mention_only: true
+    group_summary_every_messages: 25

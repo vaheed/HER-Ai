@@ -191,6 +191,7 @@ docker compose logs -f her-bot
 ### Startup Reliability Notes
 - Crew orchestration tasks now include explicit `expected_output` metadata so they are compatible with newer CrewAI/Pydantic validation rules.
 - Telegram polling is configured with `stop_signals=None` because the bot runs in a background thread; this avoids `set_wakeup_fd only works in main thread` runtime failures.
+- Runtime config discovery now checks `HER_CONFIG_DIR`, `/app/config`, and local `./config` paths. In Compose, `/app/config` is backed by the named volume `her_config` and auto-seeded from image defaults on first startup, so users can edit configs persistently without rebuilding images.
 - Telegram startup now retries when Telegram API calls time out (`telegram.error.TimedOut`/`NetworkError`), so transient upstream outages no longer crash `her-bot` startup.
 - Runtime shutdown now handles the Telegram `NetworkError` variant `cannot schedule new futures after shutdown` as a clean stop signal, avoiding noisy stack traces during service/container termination.
 - Startup warm-up checks are now **disabled by default** (`STARTUP_WARMUP_ENABLED=false`) so token-limited providers do not crash `her-bot` during boot; enable only when you explicitly want startup self-tests.
@@ -198,6 +199,7 @@ docker compose logs -f her-bot
 - Long-term memory writes/searches now fail open by default (`MEMORY_STRICT_MODE=false`): if Mem0/LLM memory operations fail (for example low-RAM Ollama errors), HER logs a warning, keeps short-term Redis context, and still replies to users. Set `MEMORY_STRICT_MODE=true` to restore fail-fast behavior.
 - Telegram chat replies now automatically retry transient LLM API failures (rate limits/timeouts/connection blips) and return a friendly retry-wait message instead of a stack trace when provider token limits are hit.
 - Telegram public mode now supports admin approval (`/approve <user_id>`) and per-minute rate limiting; users can run `/mode` to inspect their access state.
+- In Telegram groups, HER now tracks conversation context continuously for memory/reflection, creates periodic group summaries, and (by default) only replies when directly mentioned or when users reply to HER. Tune via `config/telegram.yaml` (`group_reply_on_mention_only`, `group_summary_every_messages`).
 - If logs show `model requires more system memory ... than is available`, your Ollama chat model is too large for current container RAM; switch to a smaller `OLLAMA_MODEL` (or raise memory limits) to restore long-term memory writes/search quality.
 
 ## ✅ Step-by-Step Ability Test (End-to-End)

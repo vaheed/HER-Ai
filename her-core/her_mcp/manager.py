@@ -7,6 +7,7 @@ from string import Template
 from typing import Any
 
 import yaml
+from utils.config_paths import resolve_config_file
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
@@ -16,8 +17,8 @@ logger = logging.getLogger(__name__)
 class MCPManager:
     """Manages MCP server lifecycle and tool execution."""
 
-    def __init__(self, config_path: str = "config/mcp_servers.yaml"):
-        self.config_path = Path(config_path)
+    def __init__(self, config_path: str = "mcp_servers.yaml"):
+        self.config_path = resolve_config_file(config_path)
         self.config = self._load_config(self.config_path)
         self.sessions: dict[str, ClientSession] = {}
         self.tools_cache: dict[str, list[dict[str, Any]]] = {}

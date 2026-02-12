@@ -21,6 +21,8 @@ class HERBot:
         rate_limiter,
         mcp_manager=None,
         welcome_message: str = "Hi! I'm HER, your AI companion. How can I help you today?",
+        group_reply_on_mention_only: bool = True,
+        group_summary_every_messages: int = 25,
     ):
         self.token = token
         self.handlers = MessageHandlers(
@@ -32,6 +34,8 @@ class HERBot:
             mcp_manager=mcp_manager,
             reflection_agent=reflection_agent,
             welcome_message=welcome_message,
+            group_reply_on_mention_only=group_reply_on_mention_only,
+            group_summary_every_messages=group_summary_every_messages,
         )
         self.reflection_agent = reflection_agent
         self.app = None
@@ -52,6 +56,8 @@ class HERBot:
 
         logger.info("Starting Telegram bot...")
         await self.app.initialize()
+        me = await self.app.bot.get_me()
+        self.handlers.set_bot_username(me.username)
         await self.app.start()
         await self.app.updater.start_polling()
         logger.info("✓ Telegram bot is running!")

@@ -3,8 +3,6 @@ import logging
 import os
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from pathlib import Path
-
 import yaml
 from dotenv import load_dotenv
 
@@ -15,6 +13,7 @@ from her_mcp.tools import MCPToolsIntegration
 from memory import HERMemory, RedisContextStore, initialize_database
 from her_telegram.bot import HERBot
 from her_telegram.rate_limiter import RateLimiter
+from utils.config_paths import resolve_config_file
 
 
 class HealthHandler(BaseHTTPRequestHandler):
@@ -59,8 +58,8 @@ async def async_main(config: AppConfig) -> None:
     tools = mcp_tools.create_curated_tools()
     logger.info("✓ Created %s tools", len(tools))
 
-    agents_config = Path("/app/config/agents.yaml")
-    personality_config = Path("/app/config/personality.yaml")
+    agents_config = resolve_config_file("agents.yaml")
+    personality_config = resolve_config_file("personality.yaml")
 
     logger.info("Initializing agents...")
     conversation_agent = ConversationAgent(agents_config).build(tools=tools)
@@ -69,9 +68,9 @@ async def async_main(config: AppConfig) -> None:
     personality_agent = personality_manager.build()
     logger.info("✓ Agents initialized")
 
-    with open("config/telegram.yaml", "r", encoding="utf-8") as handle:
+    with resolve_config_file("telegram.yaml").open("r", encoding="utf-8") as handle:
         telegram_config = yaml.safe_load(handle) or {}
-    with open("config/rate_limits.yaml", "r", encoding="utf-8") as handle:
+    with resolve_config_file("rate_limits.yaml").open("r", encoding="utf-8") as handle:
         rate_config = yaml.safe_load(handle) or {}
 
     rate_limiter = RateLimiter(
@@ -84,6 +83,8 @@ async def async_main(config: AppConfig) -> None:
     if env_admin and env_admin.isdigit() and int(env_admin) not in admin_user_ids:
         admin_user_ids.append(int(env_admin))
 
+    features = telegram_config.get("bot", {}).get("features", {})
+
     bot = HERBot(
         token=os.getenv("TELEGRAM_BOT_TOKEN", ""),
         conversation_agent=conversation_agent,
@@ -93,9 +94,11 @@ async def async_main(config: AppConfig) -> None:
         admin_user_ids=admin_user_ids,
         rate_limiter=rate_limiter,
         mcp_manager=mcp_manager,
-        welcome_message=telegram_config.get("bot", {}).get("features", {}).get(
+        welcome_message=features.get(
             "welcome_message", "Hi! I'm HER, your AI companion. How can I help you today?"
         ),
+        group_reply_on_mention_only=features.get("group_reply_on_mention_only", True),
+        group_summary_every_messages=features.get("group_summary_every_messages", 25),
     )
 
     if config.telegram_enabled and config.telegram_bot_token:

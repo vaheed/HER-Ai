@@ -205,7 +205,7 @@ CREATE INDEX ON memories USING ivfflat (embedding vector_cosine_ops);
 ---
 
 ### Phase 2: Telegram Integration & Sandbox Tools (Weeks 4-5)
-**Status**: 🚧 In Progress  
+**Status**: 🚧 In Progress (Core scaffolding merged)  
 **Priority**: High
 
 #### 2.1 Telegram Bot Development (Week 4)
@@ -219,26 +219,35 @@ CREATE INDEX ON memories USING ivfflat (embedding vector_cosine_ops);
 - [x] Set up python-telegram-bot library
 - [x] Implement bot initialization and authentication
 - [x] Create admin mode detection (whitelist user IDs)
-- [ ] Build command handlers:
+- [x] Build command handlers:
   - `/start` - Initialize conversation
   - `/status` - Show HER's state (admin)
   - `/personality` - Tune traits (admin)
   - `/memories` - Browse memories (admin)
   - `/reflect` - Trigger reflection (admin)
   - `/reset` - Clear context (admin)
+  - `/mcp` - Show MCP server status (admin)
   - `/help` - Show commands
 - [x] Implement message handling pipeline
 - [x] Add conversation state tracking
-- [x] Create public mode approval system
+- [ ] Create public mode approval system
 - [x] Implement rate limiting for public users
-- [ ] Add inline keyboard interactions
-- [ ] Build error message formatting
+- [x] Add inline keyboard interactions
+- [ ] Build full error message formatting + retry UX
 
 **Deliverables:**
 - Functional Telegram bot
 - Admin/public mode working
 - All commands implemented
 - Rate limiting active
+
+**Implementation Snapshot (current repo):**
+- Telegram package now lives under `her-core/telegram/` with:
+  - `bot.py` (application lifecycle)
+  - `handlers.py` (commands, callbacks, message flow)
+  - `keyboards.py` (inline admin UI)
+  - `rate_limiter.py` (public-mode throttle)
+- Startup wiring is in `her-core/main.py` and reads `config/telegram.yaml` + `config/rate_limits.yaml`.
 
 **Bot Architecture:**
 ```python
@@ -282,20 +291,20 @@ class HERBot:
 - Replace custom tools with MCP standard
 
 **Tasks:**
-- [ ] Install MCP Python SDK
+- [x] Install MCP Python SDK
   - `pip install mcp`
   - Set up MCP client in HER
-- [ ] Configure essential pre-built MCP servers
+- [x] Configure essential pre-built MCP servers
   - Web Search: `@modelcontextprotocol/server-brave-search`
   - File System: `@modelcontextprotocol/server-filesystem`
   - PostgreSQL: `@modelcontextprotocol/server-postgres`
-  - GitHub: `@modelcontextprotocol/server-github`
+  - Memory: `@modelcontextprotocol/server-memory`
   - Puppeteer: `@modelcontextprotocol/server-puppeteer`
-- [ ] Create MCP server configuration system
+- [x] Create MCP server configuration system
   - YAML-based config for enabled servers
   - Environment variable management
   - Dynamic server loading
-- [ ] Build MCP client wrapper for CrewAI
+- [x] Build MCP client wrapper for CrewAI
   - Translate MCP tools to CrewAI format
   - Handle MCP server lifecycle
   - Implement error handling
@@ -303,20 +312,28 @@ class HERBot:
   - Memory query server (semantic search)
   - Personality adjustment server
   - User context server
-- [ ] Test MCP integrations
+- [ ] Test MCP integrations against real external server processes
   - Verify each server works independently
   - Test error handling
   - Performance testing
-- [ ] Add MCP server discovery
+- [x] Add MCP server discovery
   - List available servers
   - Show tool capabilities
   - Admin interface for enabling/disabling
 
 **Deliverables:**
 - MCP SDK integrated
-- 5+ pre-built servers configured
+- 4+ pre-built servers configured (plus optional Puppeteer)
 - Custom MCP servers (if needed)
 - Admin controls for MCP
+
+**Implementation Snapshot (current repo):**
+- MCP package now lives under `her-core/mcp/` with:
+  - `manager.py` (`MCPManager` lifecycle, tool listing, calls, status)
+  - `tools.py` (CrewAI tool bridge)
+  - `helpers.py` (quick helper wrappers)
+- Default MCP profile is `config/mcp_servers.yaml`.
+- Environment variables for this profile are documented in `.env.example` (`BRAVE_API_KEY`, `POSTGRES_URL`).
 
 **MCP Architecture:**
 ```python

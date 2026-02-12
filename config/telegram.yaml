@@ -1,0 +1,23 @@
+bot:
+  admin_user_ids:
+    - 123456789
+
+  commands:
+    admin:
+      - /start - Initialize conversation
+      - /status - View HER's current state
+      - /personality - Adjust personality traits
+      - /memories - Browse stored memories
+      - /reflect - Trigger manual reflection
+      - /reset - Clear conversation context
+      - /mcp - View MCP server status
+      - /help - Show all commands
+
+    public:
+      - /start - Start chatting with HER
+      - /help - Get help
+
+  features:
+    public_mode_enabled: true
+    approval_required: false
+    welcome_message: "Hi! I'm HER, your AI companion. How can I help you today?"

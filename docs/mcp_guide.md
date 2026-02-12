@@ -24,6 +24,31 @@ The Model Context Protocol is the **perfect replacement** for custom tools becau
 
 ## 🚀 Quick Start
 
+
+## 📌 Current Repository Implementation (Phase 2 scaffolding)
+
+The repository currently includes a concrete MCP implementation used by startup wiring:
+
+- `her-core/mcp/manager.py`
+  - Loads `config/mcp_servers.yaml`
+  - Starts enabled MCP servers
+  - Caches tool metadata
+  - Exposes `call_tool()`, `get_all_tools()`, and `get_server_status()`
+- `her-core/mcp/tools.py`
+  - Wraps curated MCP actions as CrewAI tools (`web_search`, `read_file`, `write_file`, `query_database`, optional `navigate_browser`)
+- `her-core/mcp/helpers.py`
+  - Async convenience wrappers for web/file operations
+- `her-core/main.py`
+  - Initializes MCP manager at startup and injects curated tools into the conversation agent
+
+Default MCP profile in this repo: `config/mcp_servers.yaml`
+
+- Enabled by default: `brave-search`, `filesystem`, `postgres`, `memory`
+- Disabled by default: `puppeteer`
+
+Required environment variables for this profile are documented in `.env.example`:
+`BRAVE_API_KEY`, `POSTGRES_URL`.
+
 ## ✅ Ready-to-use local MCP profile
 
 This repository now ships a free local MCP profile at:
@@ -94,7 +119,7 @@ servers:
     description: "Knowledge graph for context"
   
   - name: puppeteer
-    enabled: true
+    enabled: false
     command: npx
     args:
       - -y
@@ -663,7 +688,7 @@ servers:
     description: "Knowledge graph for contextual memory"
   
   - name: puppeteer
-    enabled: true
+    enabled: false
     command: npx
     args: ["-y", "@modelcontextprotocol/server-puppeteer"]
     env: {}

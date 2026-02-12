@@ -320,10 +320,13 @@ make sure the bot image is using a Mem0 release that supports pgvector (`mem0ai>
 
 ### Python dependency resolution conflict (`ResolutionImpossible`)
 If dependency installation fails with an error involving `pydantic` and `ollama`, use the pinned core dependency set from this repository. Current compatible pins are:
-- `pydantic==2.7.4`
+- `pydantic==2.12.5`
 - `ollama==0.3.3`
+- `httpx==0.27.2`
+- `python-telegram-bot==21.6`
+- `mcp==1.26.0`
 
-These pins keep `crewai`, `mem0ai`, `fastapi`, and `langsmith` compatible in the `her-core` environment.
+These pins keep `crewai`, `mem0ai`, `mcp`, `ollama`, `groq`, and `langsmith` compatible in the `her-core` environment.
 
 ### PostgreSQL `column "id" does not exist` with Groq/Mem0 startup
 If logs show errors like:
@@ -530,6 +533,7 @@ MIT License - see [LICENSE](LICENSE) for details.
 ## Phase 2: Telegram + MCP Integration
 
 > Dependency note: `her-core/requirements.txt` pins `mcp==1.26.0` because `0.9.0` is no longer available on PyPI in current environments.
+> Compatibility note: runtime deps are aligned around `httpx==0.27.2`, `python-telegram-bot==21.6`, and `pydantic==2.12.5` to avoid resolver conflicts with `mcp`/`ollama`/`groq`/`langsmith`. The previous `fastapi` pin was removed because it was unused in HER runtime and conflicted with newer `mcp` transitive requirements.
 
 Phase 2 adds a structured Telegram interface and MCP server orchestration:
 

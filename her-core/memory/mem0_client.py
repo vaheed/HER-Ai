@@ -71,6 +71,12 @@ class HERMemory:
             return {"api_key": config.openai_api_key, "model": config.openai_model}
         if config.llm_provider == "groq":
             return {"api_key": config.groq_api_key, "model": config.groq_model}
+        if config.llm_provider == "openrouter":
+            return {
+                "api_key": config.openrouter_api_key,
+                "model": config.openrouter_model,
+                "openai_base_url": config.openrouter_api_base,
+            }
         if config.llm_provider == "ollama":
             return {"model": config.ollama_model, "ollama_base_url": config.ollama_base_url}
         return {}

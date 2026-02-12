@@ -20,6 +20,9 @@ class AppConfig:
     openai_model: str = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
     groq_api_key: str | None = os.getenv("GROQ_API_KEY")
     groq_model: str = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+    openrouter_api_key: str | None = os.getenv("OPENROUTER_API_KEY")
+    openrouter_model: str = os.getenv("OPENROUTER_MODEL", "meta-llama/llama-3.3-70b-instruct")
+    openrouter_api_base: str = os.getenv("OPENROUTER_API_BASE", "https://openrouter.ai/api/v1")
     ollama_model: str = os.getenv("OLLAMA_MODEL", "llama3.2:3b")
 
     embedder_provider: str = os.getenv("EMBEDDER_PROVIDER", "ollama")

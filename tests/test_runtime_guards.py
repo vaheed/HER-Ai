@@ -80,3 +80,24 @@ def test_memory_search_results_are_normalized_to_list_shape() -> None:
     assert "def _normalize_search_results" in mem_source
     assert "results = with_retry" in mem_source
     assert "return _normalize_search_results(results)" in mem_source
+
+
+def test_telegram_retries_transient_llm_failures_and_parses_retry_hints() -> None:
+    source = Path("her-core/telegram_bot.py").read_text()
+    assert "_extract_retry_after_seconds" in source
+    assert "retry_on=(RateLimitError, APITimeoutError, APIConnectionError)" in source
+    assert "I'm temporarily rate-limited by the model provider." in source
+
+
+def test_openrouter_provider_is_supported_for_chat_and_memory() -> None:
+    llm_factory_source = Path("her-core/utils/llm_factory.py").read_text()
+    mem_source = Path("her-core/memory/mem0_client.py").read_text()
+    config_source = Path("her-core/config.py").read_text()
+    env_example = Path(".env.example").read_text()
+
+    assert 'if provider == "openrouter"' in llm_factory_source
+    assert 'OPENROUTER_API_KEY' in env_example
+    assert 'OPENROUTER_MODEL' in env_example
+    assert 'OPENROUTER_API_BASE' in env_example
+    assert 'openrouter_api_key' in config_source
+    assert 'if config.llm_provider == "openrouter"' in mem_source

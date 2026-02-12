@@ -18,6 +18,12 @@ def build_llm() -> ChatOpenAI:
             openai_api_key=os.getenv("GROQ_API_KEY"),
             openai_api_base=os.getenv("GROQ_API_BASE", "https://api.groq.com/openai/v1"),
         )
+    if provider == "openrouter":
+        return ChatOpenAI(
+            model=os.getenv("OPENROUTER_MODEL", "meta-llama/llama-3.3-70b-instruct"),
+            openai_api_key=os.getenv("OPENROUTER_API_KEY"),
+            openai_api_base=os.getenv("OPENROUTER_API_BASE", "https://openrouter.ai/api/v1"),
+        )
     return ChatOpenAI(
         model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
         openai_api_key=os.getenv("OPENAI_API_KEY"),

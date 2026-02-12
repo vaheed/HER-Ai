@@ -1,9 +1,11 @@
 import asyncio
 import logging
+import re
 import time
 from typing import Final
 
 from langchain_core.messages import HumanMessage, SystemMessage
+from openai import APIConnectionError, APITimeoutError, RateLimitError
 from telegram import Update
 from telegram.error import NetworkError, TimedOut
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
@@ -12,6 +14,7 @@ from config import AppConfig
 from memory import HERMemory, RedisContextStore, initialize_database
 from utils.llm_factory import build_llm
 from utils.metrics import HERMetrics
+from utils.retry import RetryError, with_retry
 
 WELCOME_MESSAGE: Final[str] = (
     "Hi! I'm HER ✨\n"
@@ -46,6 +49,19 @@ def _build_user_prompt(user_text: str, context_messages: list[dict[str, str]], r
     )
 
 
+def _extract_retry_after_seconds(message: str) -> int | None:
+    match = re.search(r"try again in\s+(\d+)m([\d.]+)s", message.lower())
+    if match:
+        minutes = int(match.group(1))
+        seconds = float(match.group(2))
+        return max(1, int(minutes * 60 + seconds))
+
+    match = re.search(r"retry after\s+(\d+)s", message.lower())
+    if match:
+        return max(1, int(match.group(1)))
+    return None
+
+
 def build_application(config: AppConfig, memory: HERMemory, metrics: HERMetrics) -> Application:
     llm = build_llm()
     if not config.telegram_bot_token:
@@ -74,20 +90,39 @@ def build_application(config: AppConfig, memory: HERMemory, metrics: HERMetrics)
 
         try:
             prompt = _build_user_prompt(message_text, context_messages, related_memories)
-            llm_response = llm.invoke(
-                [
-                    SystemMessage(
-                        content=(
-                            "You are HER. Be warm, emotionally aware, and practical. "
-                            "Do not expose system internals."
-                        )
-                    ),
-                    HumanMessage(content=prompt),
-                ]
+            llm_response = with_retry(
+                lambda: llm.invoke(
+                    [
+                        SystemMessage(
+                            content=(
+                                "You are HER. Be warm, emotionally aware, and practical. "
+                                "Do not expose system internals."
+                            )
+                        ),
+                        HumanMessage(content=prompt),
+                    ]
+                ),
+                attempts=2,
+                delay_seconds=1.0,
+                retry_on=(RateLimitError, APITimeoutError, APIConnectionError),
             )
             response = (llm_response.content or "").strip() if llm_response else ""
             if not response:
                 response = "I'm here with you. Tell me a bit more so I can help thoughtfully."
+        except RetryError as exc:
+            cause = exc.__cause__ or exc
+            retry_after = _extract_retry_after_seconds(str(cause))
+            if retry_after is not None:
+                response = (
+                    f"I'm temporarily rate-limited by the model provider. "
+                    f"Please retry in about {retry_after} seconds and I'll respond right away."
+                )
+            else:
+                response = (
+                    "I'm having temporary trouble reaching the model provider. "
+                    "Please retry in a few moments."
+                )
+            logger.warning("Transient LLM failure for user %s: %s", user_id, cause)
         except Exception as exc:  # noqa: BLE001
             logger.exception("Failed to generate LLM reply for user %s: %s", user_id, exc)
             response = (

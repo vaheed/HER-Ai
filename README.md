@@ -126,6 +126,11 @@ GROQ_API_KEY=your_groq_api_key
 GROQ_MODEL=llama-3.3-70b-versatile
 GROQ_API_BASE=https://api.groq.com/openai/v1
 
+# OR OpenRouter (optional)
+OPENROUTER_API_KEY=your_openrouter_api_key
+OPENROUTER_MODEL=meta-llama/llama-3.3-70b-instruct
+OPENROUTER_API_BASE=https://openrouter.ai/api/v1
+
 # Optional: MCP Servers (add any you want to use)
 # Google Drive
 GOOGLE_CLIENT_ID=your_google_client_id
@@ -189,6 +194,7 @@ docker compose logs -f her-bot
 - Startup warm-up checks are now **disabled by default** (`STARTUP_WARMUP_ENABLED=false`) so token-limited providers do not crash `her-bot` during boot; enable only when you explicitly want startup self-tests.
 - You can disable Telegram polling entirely with `TELEGRAM_ENABLED=false` (useful for local core testing without Telegram connectivity).
 - Long-term memory writes/searches now fail open by default (`MEMORY_STRICT_MODE=false`): if Mem0/LLM memory operations fail (for example low-RAM Ollama errors), HER logs a warning, keeps short-term Redis context, and still replies to users. Set `MEMORY_STRICT_MODE=true` to restore fail-fast behavior.
+- Telegram chat replies now automatically retry transient LLM API failures (rate limits/timeouts/connection blips) and return a friendly retry-wait message instead of a stack trace when provider token limits are hit.
 - If logs show `model requires more system memory ... than is available`, your Ollama chat model is too large for current container RAM; switch to a smaller `OLLAMA_MODEL` (or raise memory limits) to restore long-term memory writes/search quality.
 
 5. **Start Chatting (Telegram)**

@@ -452,6 +452,11 @@ HER: With the weather looking nice this weekend, are you planning
 
 The Docker Compose file is wired to GHCR images for `her-bot`, `her-dashboard`, and `her-sandbox`.
 
+**Automated tags via GitHub Actions (`.github/workflows/ci.yml`):**
+- push to `main`: publishes `latest` + `sha-*` tags
+- push tag like `v0.0.1`: publishes `v0.0.1` and `0.0.1` tags (+ `sha-*`)
+- publish a GitHub Release with tag `v0.0.1`: also publishes matching image tags
+
 ```bash
 # Build images
 docker compose build

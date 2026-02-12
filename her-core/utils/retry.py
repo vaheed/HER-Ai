@@ -31,4 +31,7 @@ def with_retry(
             time.sleep(min(next_delay, max_delay_seconds))
             next_delay = min(next_delay * backoff_multiplier, max_delay_seconds)
 
-    raise RetryError("Operation failed after retries") from last_exc
+    detail = "unknown error"
+    if last_exc is not None:
+        detail = f"{last_exc.__class__.__name__}: {last_exc}"
+    raise RetryError(f"Operation failed after retries: {detail}") from last_exc

@@ -60,3 +60,23 @@ def test_telegram_runtime_shutdown_error_exits_cleanly() -> None:
     assert "_is_shutdown_network_error" in source
     assert "Telegram polling stopped during runtime shutdown" in source
 
+
+
+def test_memory_failures_fallback_to_context_only_by_default() -> None:
+    mem_source = Path("her-core/memory/mem0_client.py").read_text()
+    config_source = Path("her-core/config.py").read_text()
+    env_example = Path(".env.example").read_text()
+
+    assert "memory_strict_mode" in config_source
+    assert "MEMORY_STRICT_MODE=false" in env_example
+    assert "except RetryError" in mem_source
+    assert "_is_ollama_low_memory_error" in mem_source
+    assert "model requires more system memory" in Path("README.md").read_text()
+    assert "return []" in mem_source
+
+
+def test_memory_search_results_are_normalized_to_list_shape() -> None:
+    mem_source = Path("her-core/memory/mem0_client.py").read_text()
+    assert "def _normalize_search_results" in mem_source
+    assert "results = with_retry" in mem_source
+    assert "return _normalize_search_results(results)" in mem_source

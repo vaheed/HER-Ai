@@ -1,15 +1,19 @@
+import logging
 from typing import Any
 
 from mem0 import Memory
 
 from config import AppConfig
 from memory.redis_client import RedisContextStore
-from utils.retry import with_retry
+from utils.retry import RetryError, with_retry
+
+logger = logging.getLogger("her-memory")
 
 
 class HERMemory:
     def __init__(self, config: AppConfig, context_store: RedisContextStore) -> None:
         self._context_store = context_store
+        self._config = config
 
         llm_config = self._build_llm_config(config)
         embedder_config = self._build_embedder_config(config)
@@ -60,16 +64,28 @@ class HERMemory:
         return {"model": config.embedding_model}
 
     def add_memory(self, user_id: str, text: str, category: str, importance: float) -> dict[str, Any]:
-        return with_retry(
-            lambda: self._mem0.add(
-                text,
-                user_id=user_id,
-                metadata={"category": category, "importance": importance},
+        try:
+            return with_retry(
+                lambda: self._mem0.add(
+                    text,
+                    user_id=user_id,
+                    metadata={"category": category, "importance": importance},
+                )
             )
-        )
+        except RetryError:
+            if self._config.memory_strict_mode:
+                raise
+            logger.warning("Memory add skipped for user %s after retries; continuing without long-term memory.", user_id)
+            return {"status": "skipped", "reason": "memory_backend_unavailable"}
 
     def search_memories(self, user_id: str, query: str, limit: int = 5) -> list[dict[str, Any]]:
-        return with_retry(lambda: self._mem0.search(query, user_id=user_id, limit=limit))
+        try:
+            return with_retry(lambda: self._mem0.search(query, user_id=user_id, limit=limit))
+        except RetryError:
+            if self._config.memory_strict_mode:
+                raise
+            logger.warning("Memory search skipped for user %s after retries; falling back to short-term context only.", user_id)
+            return []
 
     def update_memory(self, memory_id: str, updates: dict[str, Any]) -> dict[str, Any]:
         if not hasattr(self._mem0, "update"):

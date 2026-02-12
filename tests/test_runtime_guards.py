@@ -60,3 +60,14 @@ def test_telegram_runtime_shutdown_error_exits_cleanly() -> None:
     assert "_is_shutdown_network_error" in source
     assert "Telegram polling stopped during runtime shutdown" in source
 
+
+
+def test_memory_failures_fallback_to_context_only_by_default() -> None:
+    mem_source = Path("her-core/memory/mem0_client.py").read_text()
+    config_source = Path("her-core/config.py").read_text()
+    env_example = Path(".env.example").read_text()
+
+    assert "memory_strict_mode" in config_source
+    assert "MEMORY_STRICT_MODE=false" in env_example
+    assert "except RetryError" in mem_source
+    assert "return []" in mem_source

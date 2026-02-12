@@ -30,6 +30,7 @@ class AppConfig:
 
     memory_vector_provider: str = os.getenv("MEMORY_VECTOR_PROVIDER", "pgvector")
     memory_collection_name: str = os.getenv("MEMORY_COLLECTION_NAME", "memories")
+    memory_strict_mode: bool = _env_bool("MEMORY_STRICT_MODE", False)
 
     postgres_user: str = os.getenv("POSTGRES_USER", "her")
     postgres_password: str = os.getenv("POSTGRES_PASSWORD", "changeme123")

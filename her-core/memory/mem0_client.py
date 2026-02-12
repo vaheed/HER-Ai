@@ -10,6 +10,26 @@ from utils.retry import RetryError, with_retry
 logger = logging.getLogger("her-memory")
 
 
+def _retry_root_cause_message(exc: RetryError) -> str:
+    root = exc.__cause__ or exc
+    return f"{root.__class__.__name__}: {root}"
+
+
+def _is_ollama_low_memory_error(message: str) -> bool:
+    lower = message.lower()
+    return "model requires more system memory" in lower and "than is available" in lower
+
+
+def _normalize_search_results(results: object) -> list[dict[str, Any]]:
+    if isinstance(results, list):
+        return [item for item in results if isinstance(item, dict)]
+    if isinstance(results, dict):
+        raw_items = results.get("results") or results.get("memories") or []
+        if isinstance(raw_items, list):
+            return [item for item in raw_items if isinstance(item, dict)]
+    return []
+
+
 class HERMemory:
     def __init__(self, config: AppConfig, context_store: RedisContextStore) -> None:
         self._context_store = context_store
@@ -72,19 +92,46 @@ class HERMemory:
                     metadata={"category": category, "importance": importance},
                 )
             )
-        except RetryError:
+        except RetryError as exc:
             if self._config.memory_strict_mode:
                 raise
-            logger.warning("Memory add skipped for user %s after retries; continuing without long-term memory.", user_id)
-            return {"status": "skipped", "reason": "memory_backend_unavailable"}
+            cause_message = _retry_root_cause_message(exc)
+            if _is_ollama_low_memory_error(cause_message):
+                logger.warning(
+                    "Memory add skipped for user %s due to Ollama RAM limits (%s). "
+                    "Use a smaller OLLAMA_MODEL or increase container memory.",
+                    user_id,
+                    cause_message,
+                )
+            else:
+                logger.warning(
+                    "Memory add skipped for user %s after retries (%s); continuing without long-term memory.",
+                    user_id,
+                    cause_message,
+                )
+            return {"status": "skipped", "reason": "memory_backend_unavailable", "detail": cause_message}
 
     def search_memories(self, user_id: str, query: str, limit: int = 5) -> list[dict[str, Any]]:
         try:
-            return with_retry(lambda: self._mem0.search(query, user_id=user_id, limit=limit))
-        except RetryError:
+            results = with_retry(lambda: self._mem0.search(query, user_id=user_id, limit=limit))
+            return _normalize_search_results(results)
+        except RetryError as exc:
             if self._config.memory_strict_mode:
                 raise
-            logger.warning("Memory search skipped for user %s after retries; falling back to short-term context only.", user_id)
+            cause_message = _retry_root_cause_message(exc)
+            if _is_ollama_low_memory_error(cause_message):
+                logger.warning(
+                    "Memory search skipped for user %s due to Ollama RAM limits (%s). "
+                    "Falling back to short-term context only.",
+                    user_id,
+                    cause_message,
+                )
+            else:
+                logger.warning(
+                    "Memory search skipped for user %s after retries (%s); falling back to short-term context only.",
+                    user_id,
+                    cause_message,
+                )
             return []
 
     def update_memory(self, memory_id: str, updates: dict[str, Any]) -> dict[str, Any]:

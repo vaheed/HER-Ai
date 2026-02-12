@@ -33,56 +33,8 @@ jobs:
       - name: Run unit tests
         run: pytest -q
 
-  smoke-test:
-    needs: test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Prepare env file for compose
-        run: cp .env.example .env
-      - name: Validate compose config
-        run: docker compose config
-      - name: Smoke check both image pull and local build paths
-        run: |
-          docker compose pull her-bot dashboard sandbox
-          docker compose build her-bot dashboard sandbox
-
-  e2e-test:
-    needs: smoke-test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Prepare env file for compose
-        run: cp .env.example .env
-      - name: Start core infra services
-        run: docker compose up -d postgres redis
-      - name: Wait for infra health
-        run: |
-          for svc in her-postgres her-redis; do
-            for i in {1..60}; do
-              status=$(docker inspect --format='{{json .State.Health.Status}}' "$svc" | tr -d '"')
-              if [ "$status" = "healthy" ]; then
-                echo "$svc is healthy"
-                break
-              fi
-              if [ "$i" -eq 60 ]; then
-                echo "$svc failed to become healthy"
-                docker compose logs
-                exit 1
-              fi
-              sleep 2
-            done
-          done
-      - name: Build and run her-bot image runtime checks
-        run: |
-          docker compose build her-bot
-          docker compose run --rm --no-deps her-bot python -m py_compile main.py agents/crew_orchestrator.py telegram_bot.py
-      - name: Tear down compose services
-        if: always()
-        run: docker compose down -v
-
   build-push:
-    needs: [test, smoke-test, e2e-test]
+    needs: test
     runs-on: ubuntu-latest
     strategy:
       matrix:

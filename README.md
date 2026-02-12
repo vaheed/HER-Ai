@@ -189,6 +189,7 @@ docker compose logs -f her-bot
 - Startup warm-up checks are now **disabled by default** (`STARTUP_WARMUP_ENABLED=false`) so token-limited providers do not crash `her-bot` during boot; enable only when you explicitly want startup self-tests.
 - You can disable Telegram polling entirely with `TELEGRAM_ENABLED=false` (useful for local core testing without Telegram connectivity).
 - Long-term memory writes/searches now fail open by default (`MEMORY_STRICT_MODE=false`): if Mem0/LLM memory operations fail (for example low-RAM Ollama errors), HER logs a warning, keeps short-term Redis context, and still replies to users. Set `MEMORY_STRICT_MODE=true` to restore fail-fast behavior.
+- If logs show `model requires more system memory ... than is available`, your Ollama chat model is too large for current container RAM; switch to a smaller `OLLAMA_MODEL` (or raise memory limits) to restore long-term memory writes/search quality.
 
 5. **Start Chatting (Telegram)**
 - Make sure your Telegram credentials are set in `.env` (`TELEGRAM_BOT_TOKEN`, `ADMIN_USER_ID`).

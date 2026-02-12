@@ -3,7 +3,7 @@ from typing import Any
 
 from crewai.tools import BaseTool
 
-from mcp.manager import MCPManager
+from her_mcp.manager import MCPManager
 
 
 class MCPTool(BaseTool):

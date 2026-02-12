@@ -1,4 +1,4 @@
-from mcp.manager import MCPManager
+from her_mcp.manager import MCPManager
 
 
 async def web_search(mcp: MCPManager, query: str, max_results: int = 5):

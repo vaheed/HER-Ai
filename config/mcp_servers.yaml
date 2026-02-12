@@ -1,13 +1,13 @@
 servers:
   - name: brave-search
-    enabled: true
+    enabled: false
     command: npx
     args:
       - -y
       - "@modelcontextprotocol/server-brave-search"
     env:
       BRAVE_API_KEY: "${BRAVE_API_KEY}"
-    description: "Web search for current information"
+    description: "Optional Brave web search (requires BRAVE_API_KEY)"
 
   - name: filesystem
     enabled: true

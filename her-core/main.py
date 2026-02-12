@@ -13,8 +13,8 @@ from config import AppConfig
 from her_mcp.manager import MCPManager
 from her_mcp.tools import MCPToolsIntegration
 from memory import HERMemory, RedisContextStore, initialize_database
-from telegram.bot import HERBot
-from telegram.rate_limiter import RateLimiter
+from her_telegram.bot import HERBot
+from her_telegram.rate_limiter import RateLimiter
 
 
 class HealthHandler(BaseHTTPRequestHandler):

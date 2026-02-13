@@ -226,6 +226,7 @@ Common issues and solutions:
 - Verify your LLM provider credentials are correct
 - Check container logs: `docker compose logs her-bot`
 - Ensure sufficient system resources (RAM/CPU)
+- **Ollama Memory Errors**: If logs show `model requires more system memory ... than is available`, your Ollama chat model is too large for current container RAM; switch to a smaller `OLLAMA_MODEL` (or raise memory limits) to restore long-term memory writes/search quality
 
 ### Telegram Connection Issues
 - Verify `TELEGRAM_BOT_TOKEN` is correct

@@ -122,30 +122,37 @@ class MCPToolsIntegration:
         self.sandbox_container = os.getenv("SANDBOX_CONTAINER_NAME", "her-sandbox")
 
     def create_curated_tools(self) -> list[BaseTool]:
-        tools: list[BaseTool] = [
-            CurlWebSearchTool(),
-            MCPTool(
-                name="read_file",
-                description="Read a file from the workspace filesystem.",
-                mcp_manager=self.mcp,
-                server_name="filesystem",
-                tool_name="read_file",
-            ),
-            MCPTool(
-                name="write_file",
-                description="Write content to a file in the workspace filesystem.",
-                mcp_manager=self.mcp,
-                server_name="filesystem",
-                tool_name="write_file",
-            ),
-            MCPTool(
-                name="query_database",
-                description="Run SQL queries against the memory PostgreSQL database.",
-                mcp_manager=self.mcp,
-                server_name="postgres",
-                tool_name="query",
-            ),
-        ]
+        status = self.mcp.get_server_status()
+        tools: list[BaseTool] = [CurlWebSearchTool()]
+
+        if status.get("filesystem", {}).get("status") == "running":
+            tools.extend([
+                MCPTool(
+                    name="read_file",
+                    description="Read a file from the workspace filesystem.",
+                    mcp_manager=self.mcp,
+                    server_name="filesystem",
+                    tool_name="read_file",
+                ),
+                MCPTool(
+                    name="write_file",
+                    description="Write content to a file in the workspace filesystem.",
+                    mcp_manager=self.mcp,
+                    server_name="filesystem",
+                    tool_name="write_file",
+                ),
+            ])
+
+        if status.get("postgres", {}).get("status") == "running":
+            tools.append(
+                MCPTool(
+                    name="query_database",
+                    description="Run SQL queries against the memory PostgreSQL database.",
+                    mcp_manager=self.mcp,
+                    server_name="postgres",
+                    tool_name="query",
+                )
+            )
 
         # Add Twitter tools if available
         if TwitterTool and TwitterConfigTool:

@@ -14,6 +14,7 @@ from memory import HERMemory, RedisContextStore, initialize_database
 from her_telegram.bot import HERBot
 from her_telegram.rate_limiter import RateLimiter
 from utils.config_paths import resolve_config_file
+from utils.scheduler import get_scheduler
 
 
 class HealthHandler(BaseHTTPRequestHandler):
@@ -29,8 +30,59 @@ def start_health_server() -> None:
     server.serve_forever()
 
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+)
 logger = logging.getLogger("her-main")
+
+# Custom handler to log to Redis for dashboard
+class RedisLogHandler(logging.Handler):
+    """Log handler that writes to Redis for dashboard visibility."""
+
+    def __init__(self, redis_host: str, redis_port: int, redis_password: str):
+        super().__init__()
+        try:
+            import redis
+            self.redis_client = redis.Redis(
+                host=redis_host,
+                port=redis_port,
+                password=redis_password,
+                decode_responses=True,
+            )
+        except Exception:
+            self.redis_client = None
+
+    def emit(self, record):
+        if not self.redis_client:
+            return
+        try:
+            import json
+            from datetime import datetime, timezone
+
+            log_entry = {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "level": record.levelname,
+                "name": record.name,
+                "message": record.getMessage(),
+            }
+            self.redis_client.lpush("her:logs", json.dumps(log_entry))
+            self.redis_client.ltrim("her:logs", 0, 199)
+        except Exception:
+            pass  # Silently fail if Redis unavailable
+
+
+# Add Redis log handler if Redis is available
+try:
+    redis_log_handler = RedisLogHandler(
+        redis_host=os.getenv("REDIS_HOST", "redis"),
+        redis_port=int(os.getenv("REDIS_PORT", "6379")),
+        redis_password=os.getenv("REDIS_PASSWORD", ""),
+    )
+    redis_log_handler.setLevel(logging.INFO)
+    logging.getLogger().addHandler(redis_log_handler)
+except Exception:
+    pass  # Continue without Redis logging if unavailable
 
 
 async def async_main(config: AppConfig) -> None:
@@ -101,6 +153,11 @@ async def async_main(config: AppConfig) -> None:
         group_summary_every_messages=features.get("group_summary_every_messages", 25),
     )
 
+    # Start task scheduler
+    scheduler = get_scheduler()
+    await scheduler.start()
+    logger.info("✓ Task scheduler started")
+
     if config.telegram_enabled and config.telegram_bot_token:
         await bot.start()
     elif not config.telegram_enabled:
@@ -111,12 +168,14 @@ async def async_main(config: AppConfig) -> None:
     logger.info("🎉 HER is fully operational!")
     logger.info("📱 Telegram bot is listening for messages")
     logger.info("👨‍💼 Admin users: %s", admin_user_ids)
+    logger.info("⏰ Scheduled tasks: %s", len(scheduler.get_tasks()))
 
     try:
         await asyncio.Event().wait()
     except KeyboardInterrupt:
         logger.info("Shutting down...")
     finally:
+        await scheduler.stop()
         await bot.stop()
         await mcp_manager.stop_all_servers()
 

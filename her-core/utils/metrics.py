@@ -46,3 +46,79 @@ class HERMetrics:
             pipeline.execute()
         except redis.RedisError as exc:
             self._logger.warning("Failed to record metrics: %s", exc)
+
+    def record_log(self, level: str, message: str, **kwargs) -> None:
+        """Record a log entry to Redis."""
+        now = datetime.now(timezone.utc).isoformat()
+        payload = {
+            "timestamp": now,
+            "level": level,
+            "message": message,
+            **kwargs,
+        }
+
+        try:
+            self._client.lpush("her:logs", json.dumps(payload))
+            self._client.ltrim("her:logs", 0, 199)  # Keep last 200 logs
+        except redis.RedisError as exc:
+            self._logger.warning("Failed to record log: %s", exc)
+
+    def record_sandbox_execution(
+        self,
+        command: str,
+        success: bool,
+        output: str,
+        error: str,
+        exit_code: int,
+        execution_time: float,
+        user: str = "sandbox",
+        workdir: str = "/workspace",
+    ) -> None:
+        """Record sandbox execution to Redis."""
+        now = datetime.now(timezone.utc).isoformat()
+        payload = {
+            "timestamp": now,
+            "command": command,
+            "success": success,
+            "output": output,
+            "error": error,
+            "exit_code": exit_code,
+            "execution_time": execution_time,
+            "user": user,
+            "workdir": workdir,
+        }
+
+        try:
+            self._client.lpush("her:sandbox:executions", json.dumps(payload))
+            self._client.ltrim("her:sandbox:executions", 0, 99)  # Keep last 100 executions
+        except redis.RedisError as exc:
+            self._logger.warning("Failed to record sandbox execution: %s", exc)
+
+    def record_scheduled_job(
+        self,
+        name: str,
+        job_type: str,
+        success: bool,
+        result: str = "",
+        error: str = "",
+        execution_time: float = 0.0,
+        next_run: str = "",
+    ) -> None:
+        """Record scheduled job execution to Redis."""
+        now = datetime.now(timezone.utc).isoformat()
+        payload = {
+            "timestamp": now,
+            "name": name,
+            "type": job_type,
+            "success": success,
+            "result": result,
+            "error": error,
+            "execution_time": execution_time,
+            "next_run": next_run,
+        }
+
+        try:
+            self._client.lpush("her:scheduler:jobs", json.dumps(payload))
+            self._client.ltrim("her:scheduler:jobs", 0, 99)  # Keep last 100 jobs
+        except redis.RedisError as exc:
+            self._logger.warning("Failed to record scheduled job: %s", exc)

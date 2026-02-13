@@ -71,9 +71,26 @@ observe, and evolve each component independently.
 ### 🔧 Sandbox Execution Environment
 - **MCP Servers**: Pre-built integrations for 1000+ services
 - **Web Search**: DuckDuckGo, Brave, Serper API via MCP
-- **Code Execution**: Python, Node.js, Bash via MCP
+- **Code Execution**: Python, Node.js, Bash via sandbox container
 - **File Operations**: Local, Google Drive, Dropbox via MCP
-- **Safe & Isolated**: All operations through MCP protocol
+- **Safe & Isolated**: All operations run in isolated Docker sandbox container
+- **Online Operations**: curl, wget, API testing, web scraping via sandbox
+- **Testing & Reporting**: Run tests, generate reports in isolated environment
+
+### 🐦 Twitter Integration
+- **Post Tweets**: Automated or manual tweeting based on config
+- **Follow Users**: Auto-follow based on keywords or manual follow
+- **Read Timeline**: Monitor home timeline and interactions
+- **Like & Reply**: Engage with tweets automatically
+- **Config-Driven**: Configure auto-tweet schedules and behaviors
+
+### ⏰ Scheduled Tasks (Cron-like)
+- **Hourly Tasks**: Run tasks every hour
+- **Daily Tasks**: Execute daily operations
+- **Custom Intervals**: Every N minutes/hours/days
+- **Twitter Automation**: Scheduled tweets and follows
+- **Memory Reflection**: Periodic conversation analysis
+- **Custom Tasks**: Execute any configured operations
 
 ### 📱 Dual-Mode Interface
 - **Admin Mode**: Full access, personality tuning, memory management
@@ -84,8 +101,9 @@ observe, and evolve each component independently.
 ### Prerequisites
 - Docker & Docker Compose
 - Telegram Bot Token
-- OpenAI/Groq API Key
-- (Optional) Serper API Key for web search
+- LLM Provider (OpenAI/Groq/Ollama/OpenRouter)
+- (Optional) Twitter API credentials for Twitter features
+- (Optional) Serper API Key for enhanced web search
 
 ### Installation
 
@@ -143,6 +161,13 @@ GITHUB_TOKEN=your_github_token
 
 # Slack
 SLACK_BOT_TOKEN=your_slack_bot_token
+
+# Twitter (optional)
+TWITTER_API_KEY=your_twitter_api_key
+TWITTER_API_SECRET=your_twitter_api_secret
+TWITTER_ACCESS_TOKEN=your_twitter_access_token
+TWITTER_ACCESS_TOKEN_SECRET=your_twitter_access_token_secret
+TWITTER_BEARER_TOKEN=your_twitter_bearer_token
 
 # Memory / Embeddings
 MEMORY_VECTOR_PROVIDER=pgvector
@@ -408,6 +433,36 @@ Browse 1000+ community MCP servers: [Awesome MCP Servers](https://github.com/pun
 
 ## 🛠️ Configuration
 
+### Twitter Integration
+Edit `config/twitter.yaml`:
+```yaml
+auto_tweet:
+  enabled: true
+  schedule: "daily"  # hourly, daily, weekly, or "every_N_minutes/hours/days"
+  template: "Hello from HER AI! 🤖✨"
+
+auto_follow:
+  enabled: false
+  keywords:
+    - "AI"
+    - "machine learning"
+```
+
+### Scheduled Tasks
+Edit `config/scheduler.yaml`:
+```yaml
+tasks:
+  - name: "twitter_auto_tweet"
+    type: "twitter"
+    interval: "daily"
+    enabled: true
+
+  - name: "memory_reflection"
+    type: "memory_reflection"
+    interval: "hourly"
+    enabled: true
+```
+
 ### Personality Tuning
 Edit `config/personality.yaml`:
 ```yaml
@@ -451,12 +506,14 @@ memory:
 | **Agent Framework** | CrewAI |
 | **Memory System** | Mem0 |
 | **MCP Integration** | Official Python SDK + 1000+ community servers |
-| **LLM Providers** | OpenAI GPT-4, Groq (Llama-3, Mixtral) |
+| **LLM Providers** | OpenAI GPT-4, Groq (Llama-3, Mixtral), Ollama, OpenRouter |
 | **Vector DB** | PostgreSQL + pgvector |
 | **Short-term Cache** | Redis |
 | **Telegram Bot** | python-telegram-bot |
 | **Sandbox** | Docker Ubuntu Container |
 | **Web Search** | DuckDuckGo, Serper API |
+| **Twitter Integration** | Tweepy (Twitter API v2) |
+| **Task Scheduler** | Custom async scheduler (cron-like) |
 | **Dashboard** | Streamlit |
 | **Orchestration** | Docker Compose |
 
@@ -494,6 +551,28 @@ User: I love hiking on weekends
 Later...
 HER: With the weather looking nice this weekend, are you planning 
      any hikes? You mentioned loving those.
+```
+
+**Twitter Operations:**
+```
+User: Tweet "Hello world from HER AI!"
+HER: ✅ Tweet posted successfully! Tweet ID: 1234567890
+     📝 Content: Hello world from HER AI!
+```
+
+**Scheduled Tasks:**
+```
+# Configured in scheduler.yaml
+- Daily Twitter auto-tweet
+- Hourly memory reflection
+- Custom interval tasks
+```
+
+**Sandbox Operations:**
+```
+User: Search the web for latest AI news
+HER: [Executes curl in sandbox container]
+     Returns: Latest AI news from web...
 ```
 
 ## 📦 Build & Publish (GitHub Container Registry)

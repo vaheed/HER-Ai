@@ -1,75 +1,560 @@
+"""Enhanced HER Admin Dashboard with comprehensive monitoring.
+
+Features:
+- Real-time logs
+- Sandbox executor history
+- Scheduled jobs status
+- Detailed metrics
+- Memory statistics
+- Agent activity
+- System health
+"""
+
 import json
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from typing import Any
 
+import psycopg2
 import redis
-
 import streamlit as st
 
-st.set_page_config(page_title="HER Admin Dashboard", layout="wide")
+st.set_page_config(page_title="HER Admin Dashboard", layout="wide", initial_sidebar_state="expanded")
 
-st.title("HER Admin Dashboard")
-st.caption("Phase 1 foundation dashboard placeholder for system readiness checks.")
+# Initialize session state
+if "refresh_interval" not in st.session_state:
+    st.session_state.refresh_interval = 5
 
-col1, col2 = st.columns(2)
+# Configuration
+REDIS_HOST = os.getenv("REDIS_HOST", "redis")
+REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
+REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", "")
+POSTGRES_HOST = os.getenv("POSTGRES_HOST", "postgres")
+POSTGRES_PORT = int(os.getenv("POSTGRES_PORT", "5432"))
+POSTGRES_USER = os.getenv("POSTGRES_USER", "her")
+POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "changeme123")
+POSTGRES_DB = os.getenv("POSTGRES_DB", "her_memory")
 
-with col1:
-    st.subheader("Service Status")
-    st.write("✅ her-bot container running (check Docker)")
-    st.write("✅ postgres container running (check Docker)")
-    st.write("✅ redis container running (check Docker)")
-    st.write("✅ sandbox container running (check Docker)")
 
-with col2:
-    st.subheader("Environment")
-    st.write(f"Environment: {os.getenv('ENVIRONMENT', 'development')}")
-    st.write(f"LLM Provider: {os.getenv('LLM_PROVIDER', 'openai')}")
-    st.write(f"Postgres Host: {os.getenv('POSTGRES_HOST', 'postgres')}")
-    st.write(f"Redis Host: {os.getenv('REDIS_HOST', 'redis')}")
+@st.cache_resource
+def get_redis_client():
+    """Get Redis client."""
+    try:
+        return redis.Redis(
+            host=REDIS_HOST,
+            port=REDIS_PORT,
+            password=REDIS_PASSWORD,
+            decode_responses=True,
+        )
+    except Exception as exc:
+        st.error(f"Failed to connect to Redis: {exc}")
+        return None
 
-st.subheader("Quick Links")
-st.write("- Docker Compose: `docker compose ps`")
-st.write("- Logs: `docker compose logs -f her-bot`")
 
-st.subheader("Usage Metrics")
-redis_host = os.getenv("REDIS_HOST", "redis")
-redis_port = int(os.getenv("REDIS_PORT", "6379"))
-redis_password = os.getenv("REDIS_PASSWORD", "")
+@st.cache_resource
+def get_postgres_connection():
+    """Get PostgreSQL connection."""
+    try:
+        return psycopg2.connect(
+            host=POSTGRES_HOST,
+            port=POSTGRES_PORT,
+            user=POSTGRES_USER,
+            password=POSTGRES_PASSWORD,
+            database=POSTGRES_DB,
+        )
+    except Exception as exc:
+        st.error(f"Failed to connect to PostgreSQL: {exc}")
+        return None
 
-try:
-    redis_client = redis.Redis(
-        host=redis_host,
-        port=redis_port,
-        password=redis_password,
-        decode_responses=True,
+
+def get_metrics(redis_client):
+    """Get metrics from Redis."""
+    if not redis_client:
+        return {}
+    try:
+        return {
+            "total_tokens": int(redis_client.get("her:metrics:tokens") or 0),
+            "total_messages": int(redis_client.get("her:metrics:messages") or 0),
+            "unique_users": int(redis_client.scard("her:metrics:users") or 0),
+            "last_response": redis_client.get("her:metrics:last_response"),
+            "events": redis_client.lrange("her:metrics:events", 0, 99),
+            "logs": redis_client.lrange("her:logs", 0, 199),  # Recent logs
+            "sandbox_executions": redis_client.lrange("her:sandbox:executions", 0, 99),
+            "scheduled_jobs": redis_client.lrange("her:scheduler:jobs", 0, 99),
+        }
+    except Exception as exc:
+        st.warning(f"Error fetching metrics: {exc}")
+        return {}
+
+
+def get_memory_stats(pg_conn):
+    """Get memory statistics from PostgreSQL."""
+    if not pg_conn:
+        return {}
+    try:
+        cursor = pg_conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM memories")
+        total_memories = cursor.fetchone()[0]
+
+        cursor.execute("SELECT COUNT(DISTINCT user_id) FROM memories")
+        users_with_memories = cursor.fetchone()[0]
+
+        cursor.execute(
+            """
+            SELECT category, COUNT(*) as count
+            FROM memories
+            GROUP BY category
+            ORDER BY count DESC
+            LIMIT 10
+            """
+        )
+        category_counts = {row[0]: row[1] for row in cursor.fetchall()}
+
+        cursor.execute(
+            """
+            SELECT DATE(created_at) as date, COUNT(*) as count
+            FROM memories
+            WHERE created_at > NOW() - INTERVAL '30 days'
+            GROUP BY DATE(created_at)
+            ORDER BY date DESC
+            """
+        )
+        daily_memories = {str(row[0]): row[1] for row in cursor.fetchall()}
+
+        cursor.close()
+        return {
+            "total_memories": total_memories,
+            "users_with_memories": users_with_memories,
+            "category_counts": category_counts,
+            "daily_memories": daily_memories,
+        }
+    except Exception as exc:
+        st.warning(f"Error fetching memory stats: {exc}")
+        return {}
+
+
+def format_log_entry(entry: str) -> dict[str, Any]:
+    """Parse log entry."""
+    try:
+        return json.loads(entry)
+    except (json.JSONDecodeError, TypeError):
+        return {"raw": entry, "timestamp": datetime.now(timezone.utc).isoformat()}
+
+
+# Sidebar
+with st.sidebar:
+    st.title("HER Dashboard")
+    st.markdown("---")
+
+    # Auto-refresh
+    auto_refresh = st.checkbox("Auto-refresh", value=True)
+    if auto_refresh:
+        refresh_interval = st.slider("Refresh interval (seconds)", 1, 60, 5)
+        st.session_state.refresh_interval = refresh_interval
+
+    st.markdown("---")
+    st.markdown("### Navigation")
+    page = st.radio(
+        "Select Page",
+        [
+            "Overview",
+            "Logs",
+            "Executors",
+            "Jobs",
+            "Metrics",
+            "Memory",
+            "System Health",
+        ],
     )
-    total_tokens = int(redis_client.get("her:metrics:tokens") or 0)
-    total_messages = int(redis_client.get("her:metrics:messages") or 0)
-    unique_users = int(redis_client.scard("her:metrics:users") or 0)
-    last_response_raw = redis_client.get("her:metrics:last_response")
-    events_raw = redis_client.lrange("her:metrics:events", 0, 9)
-except redis.RedisError as exc:
-    st.warning(f"Unable to load metrics from Redis: {exc}")
-    total_tokens = 0
-    total_messages = 0
-    unique_users = 0
-    last_response_raw = None
-    events_raw = []
 
-metrics_col1, metrics_col2, metrics_col3 = st.columns(3)
-metrics_col1.metric("Total Token Estimate", total_tokens)
-metrics_col2.metric("Total Messages", total_messages)
-metrics_col3.metric("Unique Users", unique_users)
+    st.markdown("---")
+    st.markdown("### Quick Actions")
+    if st.button("🔄 Refresh Now"):
+        st.cache_resource.clear()
+        st.rerun()
 
-if last_response_raw:
-    st.markdown("**Last Response**")
-    st.json(json.loads(last_response_raw))
-else:
-    st.info("No responses recorded yet.")
+# Main content
+redis_client = get_redis_client()
+pg_conn = get_postgres_connection()
+metrics = get_metrics(redis_client)
+memory_stats = get_memory_stats(pg_conn)
 
-if events_raw:
-    st.markdown("**Recent Activity**")
-    st.table([json.loads(entry) for entry in events_raw])
+if page == "Overview":
+    st.title("📊 Overview Dashboard")
 
-st.subheader("Last Updated")
-st.write(datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"))
+    # Key Metrics
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Total Messages", metrics.get("total_messages", 0))
+    with col2:
+        st.metric("Total Tokens", f"{metrics.get('total_tokens', 0):,}")
+    with col3:
+        st.metric("Unique Users", metrics.get("unique_users", 0))
+    with col4:
+        st.metric("Total Memories", memory_stats.get("total_memories", 0))
+
+    st.markdown("---")
+
+    # Recent Activity
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.subheader("📝 Recent Events")
+        events = metrics.get("events", [])
+        if events:
+            for event_str in events[:10]:
+                try:
+                    event = json.loads(event_str)
+                    timestamp = event.get("timestamp", "")
+                    user_id = event.get("user_id", "unknown")
+                    st.text(f"[{timestamp[:19]}] User {user_id}: {event.get('user_message', '')[:50]}...")
+                except Exception:
+                    st.text(event_str[:100])
+        else:
+            st.info("No recent events")
+
+    with col2:
+        st.subheader("💾 Memory Categories")
+        categories = memory_stats.get("category_counts", {})
+        if categories:
+            st.bar_chart(categories)
+        else:
+            st.info("No memory categories yet")
+
+    st.markdown("---")
+
+    # System Status
+    st.subheader("🔧 System Status")
+    status_col1, status_col2, status_col3 = st.columns(3)
+
+    with status_col1:
+        st.write("**Services**")
+        st.write("✅ Redis: Connected" if redis_client else "❌ Redis: Disconnected")
+        st.write("✅ PostgreSQL: Connected" if pg_conn else "❌ PostgreSQL: Disconnected")
+
+    with status_col2:
+        st.write("**Environment**")
+        st.write(f"Environment: {os.getenv('ENVIRONMENT', 'development')}")
+        st.write(f"LLM Provider: {os.getenv('LLM_PROVIDER', 'ollama')}")
+
+    with status_col3:
+        st.write("**Last Updated**")
+        st.write(datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"))
+
+elif page == "Logs":
+    st.title("📋 System Logs")
+
+    log_level = st.selectbox("Filter by Level", ["All", "INFO", "WARNING", "ERROR", "DEBUG"])
+    search_term = st.text_input("Search logs", "")
+
+    logs = metrics.get("logs", [])
+    if not logs:
+        # Try to get logs from Redis
+        if redis_client:
+            logs = redis_client.lrange("her:logs", 0, 199)
+
+    if logs:
+        st.subheader(f"Recent Logs ({len(logs)} entries)")
+
+        filtered_logs = []
+        for log_entry in logs:
+            entry = format_log_entry(log_entry)
+            level = entry.get("level", "").upper()
+            message = entry.get("message", entry.get("raw", str(log_entry)))
+
+            if log_level != "All" and level != log_level:
+                continue
+            if search_term and search_term.lower() not in str(message).lower():
+                continue
+
+            filtered_logs.append(entry)
+
+        # Display logs in reverse order (newest first)
+        for entry in reversed(filtered_logs[-100:]):
+            level = entry.get("level", "INFO").upper()
+            timestamp = entry.get("timestamp", entry.get("raw", ""))[:19]
+            message = entry.get("message", entry.get("raw", str(entry)))
+
+            if level == "ERROR":
+                st.error(f"[{timestamp}] {message}")
+            elif level == "WARNING":
+                st.warning(f"[{timestamp}] {message}")
+            elif level == "DEBUG":
+                st.text(f"[{timestamp}] DEBUG: {message}")
+            else:
+                st.text(f"[{timestamp}] {message}")
+
+        st.info(f"Showing {len(filtered_logs)} of {len(logs)} log entries")
+    else:
+        st.info("No logs available. Logs are stored in Redis under 'her:logs' key.")
+
+elif page == "Executors":
+    st.title("🔧 Sandbox Executors")
+
+    st.subheader("Recent Executions")
+    executions = metrics.get("sandbox_executions", [])
+
+    if executions:
+        for exec_str in executions[:50]:
+            try:
+                exec_data = json.loads(exec_str)
+                with st.expander(
+                    f"Execution: {exec_data.get('command', 'unknown')[:50]} - {exec_data.get('timestamp', '')[:19]}"
+                ):
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.write(f"**Command:** `{exec_data.get('command', 'N/A')}`")
+                        st.write(f"**Status:** {'✅ Success' if exec_data.get('success') else '❌ Failed'}")
+                        st.write(f"**Exit Code:** {exec_data.get('exit_code', 'N/A')}")
+                    with col2:
+                        st.write(f"**Execution Time:** {exec_data.get('execution_time', 0):.2f}s")
+                        st.write(f"**User:** {exec_data.get('user', 'sandbox')}")
+                        st.write(f"**Workdir:** {exec_data.get('workdir', '/workspace')}")
+
+                    if exec_data.get("output"):
+                        st.text_area("Output", exec_data.get("output"), height=100, key=f"output_{exec_data.get('timestamp')}")
+
+                    if exec_data.get("error"):
+                        st.text_area("Error", exec_data.get("error"), height=50, key=f"error_{exec_data.get('timestamp')}")
+            except Exception as exc:
+                st.text(f"Error parsing execution: {exc}\n{exec_str}")
+
+        st.info(f"Showing {len(executions)} recent executions")
+    else:
+        st.info("No sandbox executions recorded yet. Executions are logged to Redis under 'her:sandbox:executions'.")
+
+    # Executor Statistics
+    if executions:
+        st.markdown("---")
+        st.subheader("Executor Statistics")
+        success_count = sum(1 for e in executions if json.loads(e).get("success", False))
+        total_count = len(executions)
+        success_rate = (success_count / total_count * 100) if total_count > 0 else 0
+
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Total Executions", total_count)
+        col2.metric("Successful", success_count)
+        col3.metric("Success Rate", f"{success_rate:.1f}%")
+
+elif page == "Jobs":
+    st.title("⏰ Scheduled Jobs")
+
+    jobs = metrics.get("scheduled_jobs", [])
+
+    if jobs:
+        st.subheader("Job History")
+        for job_str in jobs[:50]:
+            try:
+                job_data = json.loads(job_str)
+                status_icon = "✅" if job_data.get("success") else "❌"
+                with st.expander(
+                    f"{status_icon} {job_data.get('name', 'Unknown')} - {job_data.get('timestamp', '')[:19]}"
+                ):
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.write(f"**Name:** {job_data.get('name', 'N/A')}")
+                        st.write(f"**Type:** {job_data.get('type', 'N/A')}")
+                        st.write(f"**Interval:** {job_data.get('interval', 'N/A')}")
+                    with col2:
+                        st.write(f"**Status:** {'Success' if job_data.get('success') else 'Failed'}")
+                        st.write(f"**Execution Time:** {job_data.get('execution_time', 0):.2f}s")
+                        st.write(f"**Next Run:** {job_data.get('next_run', 'N/A')}")
+
+                    if job_data.get("result"):
+                        st.text_area("Result", job_data.get("result"), height=100, key=f"result_{job_data.get('timestamp')}")
+
+                    if job_data.get("error"):
+                        st.error(f"Error: {job_data.get('error')}")
+            except Exception as exc:
+                st.text(f"Error parsing job: {exc}\n{job_str}")
+
+        st.info(f"Showing {len(jobs)} recent job executions")
+    else:
+        st.info("No scheduled jobs executed yet. Jobs are logged to Redis under 'her:scheduler:jobs'.")
+
+    # Job Statistics
+    st.markdown("---")
+    st.subheader("Job Configuration")
+    st.info("Configure scheduled jobs in config/scheduler.yaml")
+
+elif page == "Metrics":
+    st.title("📈 Detailed Metrics")
+
+    # Token Usage Over Time
+    st.subheader("Token Usage")
+    events = metrics.get("events", [])
+    if events:
+        token_data = []
+        for event_str in events[-100:]:
+            try:
+                event = json.loads(event_str)
+                token_data.append(
+                    {
+                        "timestamp": event.get("timestamp", "")[:19],
+                        "tokens": event.get("token_estimate", 0),
+                    }
+                )
+            except Exception:
+                pass
+
+        if token_data:
+            import pandas as pd
+
+            df = pd.DataFrame(token_data)
+            st.line_chart(df.set_index("timestamp")["tokens"])
+
+    # Message Statistics
+    st.markdown("---")
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Total Messages", metrics.get("total_messages", 0))
+    with col2:
+        st.metric("Total Tokens", f"{metrics.get('total_tokens', 0):,}")
+    with col3:
+        st.metric("Unique Users", metrics.get("unique_users", 0))
+
+    # Recent Interactions
+    st.markdown("---")
+    st.subheader("Recent Interactions")
+    events = metrics.get("events", [])
+    if events:
+        import pandas as pd
+
+        interaction_data = []
+        for event_str in events[:20]:
+            try:
+                event = json.loads(event_str)
+                interaction_data.append(
+                    {
+                        "Timestamp": event.get("timestamp", "")[:19],
+                        "User": event.get("user_id", "unknown"),
+                        "Message": event.get("user_message", "")[:50] + "...",
+                        "Tokens": event.get("token_estimate", 0),
+                    }
+                )
+            except Exception:
+                pass
+
+        if interaction_data:
+            df = pd.DataFrame(interaction_data)
+            st.dataframe(df, use_container_width=True)
+
+elif page == "Memory":
+    st.title("💾 Memory Statistics")
+
+    mem_stats = memory_stats
+    if mem_stats:
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.subheader("Overview")
+            st.metric("Total Memories", mem_stats.get("total_memories", 0))
+            st.metric("Users with Memories", mem_stats.get("users_with_memories", 0))
+
+        with col2:
+            st.subheader("Memory Categories")
+            categories = mem_stats.get("category_counts", {})
+            if categories:
+                st.bar_chart(categories)
+            else:
+                st.info("No memory categories yet")
+
+        # Daily Memory Creation
+        st.markdown("---")
+        st.subheader("Memory Creation (Last 30 Days)")
+        daily = mem_stats.get("daily_memories", {})
+        if daily:
+            import pandas as pd
+
+            df = pd.DataFrame(list(daily.items()), columns=["Date", "Count"])
+            st.line_chart(df.set_index("Date"))
+
+        # Memory Search
+        st.markdown("---")
+        st.subheader("Search Memories")
+        search_query = st.text_input("Search query")
+        if search_query and pg_conn:
+            try:
+                cursor = pg_conn.cursor()
+                cursor.execute(
+                    """
+                    SELECT memory_text, category, created_at, importance_score
+                    FROM memories
+                    WHERE memory_text ILIKE %s
+                    ORDER BY created_at DESC
+                    LIMIT 20
+                    """,
+                    (f"%{search_query}%",),
+                )
+                results = cursor.fetchall()
+                cursor.close()
+
+                if results:
+                    for row in results:
+                        with st.expander(f"{row[1]} - {row[2]}"):
+                            st.write(f"**Text:** {row[0]}")
+                            st.write(f"**Importance:** {row[3]}")
+                else:
+                    st.info("No memories found")
+            except Exception as exc:
+                st.error(f"Search error: {exc}")
+    else:
+        st.info("No memory statistics available")
+
+elif page == "System Health":
+    st.title("🏥 System Health")
+
+    # Service Status
+    st.subheader("Service Status")
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.write("**Redis**")
+        if redis_client:
+            try:
+                redis_client.ping()
+                st.success("✅ Connected")
+                info = redis_client.info()
+                st.text(f"Version: {info.get('redis_version', 'N/A')}")
+                st.text(f"Used Memory: {info.get('used_memory_human', 'N/A')}")
+            except Exception as exc:
+                st.error(f"❌ Error: {exc}")
+        else:
+            st.error("❌ Not connected")
+
+    with col2:
+        st.write("**PostgreSQL**")
+        if pg_conn:
+            try:
+                cursor = pg_conn.cursor()
+                cursor.execute("SELECT version()")
+                version = cursor.fetchone()[0]
+                cursor.close()
+                st.success("✅ Connected")
+                st.text(f"Version: {version[:50]}...")
+            except Exception as exc:
+                st.error(f"❌ Error: {exc}")
+        else:
+            st.error("❌ Not connected")
+
+    # Environment Info
+    st.markdown("---")
+    st.subheader("Environment Information")
+    env_col1, env_col2 = st.columns(2)
+
+    with env_col1:
+        st.write(f"**Environment:** {os.getenv('ENVIRONMENT', 'development')}")
+        st.write(f"**LLM Provider:** {os.getenv('LLM_PROVIDER', 'ollama')}")
+        st.write(f"**Postgres Host:** {POSTGRES_HOST}")
+
+    with env_col2:
+        st.write(f"**Redis Host:** {REDIS_HOST}")
+        st.write(f"**Postgres DB:** {POSTGRES_DB}")
+        st.write(f"**Last Check:** {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}")
+
+# Auto-refresh
+if auto_refresh:
+    import time
+
+    time.sleep(st.session_state.refresh_interval)
+    st.rerun()

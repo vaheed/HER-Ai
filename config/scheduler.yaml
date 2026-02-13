@@ -1,0 +1,22 @@
+# Task Scheduler Configuration
+# Supports: hourly, daily, weekly, or custom intervals like "every_30_minutes"
+
+tasks:
+  # Twitter auto-tweet (if enabled in twitter.yaml)
+  - name: "twitter_auto_tweet"
+    type: "twitter"
+    interval: "daily"
+    enabled: true
+
+  # Memory reflection (analyze conversations periodically)
+  - name: "memory_reflection"
+    type: "memory_reflection"
+    interval: "hourly"
+    enabled: true
+
+  # Custom task example
+  # - name: "custom_task"
+  #   type: "custom"
+  #   interval: "every_30_minutes"
+  #   enabled: false
+  #   command: "echo 'Hello from scheduler'"

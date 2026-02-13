@@ -1,0 +1,25 @@
+# Twitter Integration Configuration
+# Set environment variables:
+#   TWITTER_API_KEY
+#   TWITTER_API_SECRET
+#   TWITTER_ACCESS_TOKEN
+#   TWITTER_ACCESS_TOKEN_SECRET
+#   TWITTER_BEARER_TOKEN (optional, for read-only operations)
+
+auto_tweet:
+  enabled: false
+  schedule: "daily"  # hourly, daily, weekly, or "every_N_minutes/hours/days"
+  template: "Hello from HER AI! 🤖✨"
+
+auto_follow:
+  enabled: false
+  keywords:
+    - "AI"
+    - "machine learning"
+    - "technology"
+
+auto_like:
+  enabled: false
+  keywords:
+    - "AI"
+    - "technology"

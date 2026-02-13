@@ -66,9 +66,13 @@ class MCPManager:
             for key, value in (config.get("env") or {}).items():
                 merged_env[key] = self._expand_env(str(value))
 
+            # Expand env vars in args (e.g. ${POSTGRES_URL}) for servers that need URLs as CLI args
+            raw_args = config.get("args", [])
+            args = [self._expand_env(str(a)) for a in raw_args]
+
             params = StdioServerParameters(
                 command=command,
-                args=config.get("args", []),
+                args=args,
                 env=merged_env,
             )
 

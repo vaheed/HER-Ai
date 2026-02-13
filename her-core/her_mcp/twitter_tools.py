@@ -26,13 +26,15 @@ class TwitterTool(BaseTool):
         "Requires Twitter API credentials configured in environment variables."
     )
 
-    def __init__(self, **kwargs: Any):
-        super().__init__(**kwargs)
-        self.api_key = os.getenv("TWITTER_API_KEY")
-        self.api_secret = os.getenv("TWITTER_API_SECRET")
-        self.access_token = os.getenv("TWITTER_ACCESS_TOKEN")
-        self.access_token_secret = os.getenv("TWITTER_ACCESS_TOKEN_SECRET")
-        self.bearer_token = os.getenv("TWITTER_BEARER_TOKEN")
+    def _get_credentials(self) -> tuple[str | None, str | None, str | None, str | None, str | None]:
+        """Fetch credentials from environment at runtime (avoids Pydantic field restrictions)."""
+        return (
+            os.getenv("TWITTER_API_KEY"),
+            os.getenv("TWITTER_API_SECRET"),
+            os.getenv("TWITTER_ACCESS_TOKEN"),
+            os.getenv("TWITTER_ACCESS_TOKEN_SECRET"),
+            os.getenv("TWITTER_BEARER_TOKEN"),
+        )
 
     def _run(
         self,
@@ -76,9 +78,10 @@ class TwitterTool(BaseTool):
 
     def _has_credentials(self) -> bool:
         """Check if Twitter credentials are available."""
+        api_key, api_secret, access_token, access_token_secret, bearer_token = self._get_credentials()
         return bool(
-            (self.api_key and self.api_secret and self.access_token and self.access_token_secret)
-            or self.bearer_token
+            (api_key and api_secret and access_token and access_token_secret)
+            or bearer_token
         )
 
     def _get_client(self):
@@ -86,14 +89,15 @@ class TwitterTool(BaseTool):
         try:
             import tweepy
 
-            if self.bearer_token:
-                return tweepy.Client(bearer_token=self.bearer_token)
-            elif self.api_key and self.api_secret and self.access_token and self.access_token_secret:
+            api_key, api_secret, access_token, access_token_secret, bearer_token = self._get_credentials()
+            if bearer_token:
+                return tweepy.Client(bearer_token=bearer_token)
+            if api_key and api_secret and access_token and access_token_secret:
                 return tweepy.Client(
-                    consumer_key=self.api_key,
-                    consumer_secret=self.api_secret,
-                    access_token=self.access_token,
-                    access_token_secret=self.access_token_secret,
+                    consumer_key=api_key,
+                    consumer_secret=api_secret,
+                    access_token=access_token,
+                    access_token_secret=access_token_secret,
                 )
             return None
         except Exception as exc:  # noqa: BLE001

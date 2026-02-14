@@ -1,4 +1,5 @@
 import logging
+import os
 from datetime import UTC, datetime
 import json
 from typing import Any
@@ -7,6 +8,7 @@ from urllib.request import urlopen
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from telegram import MessageEntity, Update
+from telegram.error import NetworkError, TimedOut
 from telegram.ext import ContextTypes
 
 from agents.personality_agent import PersonalityAgent
@@ -15,6 +17,7 @@ from her_telegram.keyboards import get_admin_menu, get_personality_adjustment
 from her_telegram.rate_limiter import RateLimiter
 from memory.mem0_client import HERMemory
 from utils.llm_factory import build_llm
+from utils.metrics import HERMetrics
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +51,15 @@ class MessageHandlers:
         self.bot_username: str | None = None
         self._llm = build_llm()
         self._web_search_tool = CurlWebSearchTool()
+        self._metrics: HERMetrics | None = None
+        try:
+            self._metrics = HERMetrics(
+                host=os.getenv("REDIS_HOST", "redis"),
+                port=int(os.getenv("REDIS_PORT", "6379")),
+                password=os.getenv("REDIS_PASSWORD", ""),
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Failed to initialize metrics recorder: %s", exc)
 
     def is_admin(self, user_id: int) -> bool:
         return user_id in self.admin_user_ids
@@ -340,13 +352,18 @@ class MessageHandlers:
         if not should_reply:
             return
 
-        await context.bot.send_chat_action(chat_id=chat_id, action="typing")
+        try:
+            await context.bot.send_chat_action(chat_id=chat_id, action="typing")
+        except (TimedOut, NetworkError) as exc:
+            logger.warning("Telegram typing indicator failed for chat %s: %s", chat_id, exc)
 
         realtime_response = self._maybe_answer_realtime_query(message)
         if realtime_response:
             self.memory.update_context(str(user_id), realtime_response, "assistant")
             if is_group:
                 self.memory.update_context(group_key, f"HER: {realtime_response}", "assistant", max_messages=120)
+            if self._metrics:
+                self._metrics.record_interaction(str(user_id), message, realtime_response)
             await self._reply(update, realtime_response)
             return
 
@@ -377,6 +394,8 @@ class MessageHandlers:
         self.memory.update_context(str(user_id), response, "assistant")
         if is_group:
             self.memory.update_context(group_key, f"HER: {response}", "assistant", max_messages=120)
+        if self._metrics:
+            self._metrics.record_interaction(str(user_id), message, response)
         await self._reply(update, response)
 
     async def handle_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):

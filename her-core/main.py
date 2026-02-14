@@ -100,10 +100,11 @@ async def async_main(config: AppConfig) -> None:
     logger.info("✓ Memory system initialized")
 
     logger.info("Initializing MCP servers...")
-    mcp_manager = MCPManager()
+    mcp_config_path = os.getenv("MCP_CONFIG_PATH", "mcp_servers.yaml")
+    mcp_manager = MCPManager(config_path=mcp_config_path)
     await mcp_manager.initialize()
     status = mcp_manager.get_server_status()
-    logger.info("✓ MCP servers started: %s", status)
+    logger.info("✓ MCP servers started from '%s': %s", mcp_config_path, status)
 
     logger.info("Creating MCP tools...")
     mcp_tools = MCPToolsIntegration(mcp_manager)

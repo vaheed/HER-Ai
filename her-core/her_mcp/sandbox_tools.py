@@ -541,3 +541,119 @@ except Exception as e:
         response_parts.append(f"\n⏱️  Execution time: {result['execution_time']:.2f}s")
 
         return "\n".join(response_parts)
+
+
+class SandboxNetworkTool(BaseTool):
+    """Run network diagnostics in the sandbox container."""
+
+    name: str = "sandbox_network"
+    description: str = (
+        "Run network diagnostics in the sandbox container. "
+        "Supports DNS lookup, ping, traceroute, port scan (nmap), and SSL checks."
+    )
+
+    def __init__(self, container_name: str = "her-sandbox", **kwargs: Any):
+        super().__init__(**kwargs)
+        self.executor = SandboxExecutor(container_name)
+
+    def _run(
+        self,
+        target: str,
+        action: str = "dns",
+        ports: str = "1-1024",
+        timeout: int = 45,
+        **_: Any,
+    ) -> str:
+        """Run diagnostic commands in sandbox."""
+        if not target.strip():
+            return "Error: Empty target"
+
+        normalized_action = action.strip().lower()
+        if normalized_action == "dns":
+            command = f"dig +short {target}"
+        elif normalized_action == "ping":
+            command = f"ping -c 4 {target}"
+        elif normalized_action == "traceroute":
+            command = f"traceroute -m 15 {target}"
+        elif normalized_action == "port_scan":
+            command = f"nmap -Pn -T4 -p {ports} {target}"
+        elif normalized_action == "ssl":
+            command = f"echo | openssl s_client -connect {target}:443 -servername {target}"
+        else:
+            return "Error: Unsupported action. Use dns, ping, traceroute, port_scan, or ssl."
+
+        result = self.executor.execute_command(command, timeout=int(timeout))
+
+        response_parts = []
+        if result["success"]:
+            response_parts.append("✅ Network diagnostic completed")
+        else:
+            response_parts.append(f"❌ Network diagnostic failed (exit code: {result['exit_code']})")
+
+        if result["output"]:
+            response_parts.append(f"\n📤 Output:\n{result['output']}")
+        if result["error"]:
+            response_parts.append(f"\n⚠️  Errors:\n{result['error']}")
+        response_parts.append(f"\n⏱️  Execution time: {result['execution_time']:.2f}s")
+        return "\n".join(response_parts)
+
+
+class SandboxSecurityScanTool(BaseTool):
+    """Run non-authenticated website and host security checks."""
+
+    name: str = "sandbox_security_scan"
+    description: str = (
+        "Run baseline security checks (no API key) for hosts/websites: "
+        "HTTP headers, robots.txt, TLS info, and common-port scans via nmap."
+    )
+
+    def __init__(self, container_name: str = "her-sandbox", **kwargs: Any):
+        super().__init__(**kwargs)
+        self.executor = SandboxExecutor(container_name)
+
+    def _run(
+        self,
+        target: str,
+        mode: str = "website",
+        timeout: int = 90,
+        **_: Any,
+    ) -> str:
+        if not target.strip():
+            return "Error: Empty target"
+
+        normalized_mode = mode.strip().lower()
+        if normalized_mode == "website":
+            script = f"""
+set -e
+echo "== HTTP HEADERS =="
+curl -fsSIL --max-time 20 "{target}" || true
+echo ""
+echo "== ROBOTS.TXT =="
+curl -fsSL --max-time 20 "{target.rstrip('/')}/robots.txt" || true
+"""
+        elif normalized_mode == "host":
+            script = f"""
+set -e
+echo "== NMAP TOP PORTS =="
+nmap -Pn -T4 --top-ports 200 "{target}" || true
+echo ""
+echo "== TLS HANDSHAKE =="
+echo | openssl s_client -connect "{target}:443" -servername "{target}" 2>/dev/null | head -n 40 || true
+"""
+        else:
+            return "Error: Unsupported mode. Use website or host."
+
+        result = self.executor.execute_shell(script, timeout=int(timeout))
+
+        response_parts = []
+        if result["success"]:
+            response_parts.append("✅ Security scan completed")
+        else:
+            response_parts.append(f"❌ Security scan failed (exit code: {result['exit_code']})")
+
+        if result["output"]:
+            response_parts.append(f"\n📤 Findings:\n{result['output']}")
+        if result["error"]:
+            response_parts.append(f"\n⚠️  Errors:\n{result['error']}")
+        response_parts.append(f"\n⏱️  Execution time: {result['execution_time']:.2f}s")
+        return "\n".join(response_parts)

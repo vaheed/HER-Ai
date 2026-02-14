@@ -41,6 +41,9 @@ services:
     - REDIS_HOST
     - REDIS_PASSWORD
     - BRAVE_API_KEY
+    - MCP_CONFIG_PATH
+    - SANDBOX_CONTAINER_NAME
+    - TZ
     volumes:
     - her_config:/app/config
     - ./logs:/app/logs
@@ -53,6 +56,7 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-her}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme123}
       POSTGRES_DB: ${POSTGRES_DB:-her_memory}
+      TZ: ${TZ:-UTC}
     volumes:
     - postgres_data:/var/lib/postgresql/data
     networks:
@@ -78,6 +82,8 @@ services:
     - redis_data:/data
     ports:
     - 6379:6379
+    environment:
+      TZ: ${TZ:-UTC}
     networks:
     - her-network
     restart: unless-stopped
@@ -98,6 +104,8 @@ services:
     - ollama_data:/root/.ollama
     ports:
     - 11434:11434
+    environment:
+      TZ: ${TZ:-UTC}
     networks:
     - her-network
     restart: unless-stopped
@@ -123,6 +131,7 @@ services:
       OLLAMA_HOST: http://ollama:11434
       OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2:3b}
       OLLAMA_EMBED_MODEL: ${OLLAMA_EMBED_MODEL:-nomic-embed-text}
+      TZ: ${TZ:-UTC}
     entrypoint:
     - /bin/bash
     - -lc
@@ -145,6 +154,8 @@ services:
     networks:
     - her-network
     restart: unless-stopped
+    environment:
+      TZ: ${TZ:-UTC}
     read_only: true
     tmpfs:
     - /tmp:noexec,nosuid,size=100m
@@ -178,6 +189,8 @@ services:
     - .env
     ports:
     - 8501:8501
+    environment:
+      TZ: ${TZ:-UTC}
     networks:
     - her-network
     restart: unless-stopped

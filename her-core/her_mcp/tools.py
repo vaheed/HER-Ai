@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+import socket
 import subprocess
 from typing import Any
 from urllib.parse import quote_plus
@@ -122,11 +123,31 @@ class MCPToolsIntegration:
     def __init__(self, mcp_manager: MCPManager):
         self.mcp = mcp_manager
         self.sandbox_container = os.getenv("SANDBOX_CONTAINER_NAME", "her-sandbox")
+        self.capability_status: dict[str, dict[str, str | bool]] = {
+            "internet": {"available": False, "reason": "not checked"},
+            "sandbox": {"available": False, "reason": "not checked"},
+        }
+
+    @staticmethod
+    def _probe_internet_access() -> tuple[bool, str]:
+        """Best-effort internet probe used for startup status visibility."""
+        test_hosts = [("api.duckduckgo.com", 443), ("example.com", 443)]
+        for host, port in test_hosts:
+            try:
+                with socket.create_connection((host, port), timeout=3):
+                    return True, f"outbound TCP to {host}:{port} works"
+            except OSError as exc:
+                last_error = str(exc)
+        return False, f"outbound internet probe failed: {last_error}"
 
     def create_curated_tools(self) -> list[BaseTool]:
         status = self.mcp.get_server_status()
         tools: list[BaseTool] = [CurlWebSearchTool()]
         tool_names: set[str] = {tools[0].name}
+        internet_ok, internet_reason = self._probe_internet_access()
+        self.capability_status["internet"] = {"available": internet_ok, "reason": internet_reason}
+        if not internet_ok:
+            logger.warning("Internet capability degraded: %s", internet_reason)
 
         if status.get("filesystem", {}).get("status") == "running":
             filesystem_tools = [
@@ -175,6 +196,10 @@ class MCPToolsIntegration:
                 container = client.containers.get(self.sandbox_container)
                 # Verify container is running
                 if container.status != "running":
+                    reason = (
+                        f"container '{self.sandbox_container}' present but status='{container.status}'"
+                    )
+                    self.capability_status["sandbox"] = {"available": False, "reason": reason}
                     logger.warning(
                         "Sandbox container '%s' exists but is not running (status: %s)",
                         self.sandbox_container,
@@ -193,20 +218,40 @@ class MCPToolsIntegration:
                     ]
                     tools.extend(sandbox_tools)
                     tool_names.update(tool.name for tool in sandbox_tools)
+                    self.capability_status["sandbox"] = {
+                        "available": True,
+                        "reason": f"container '{self.sandbox_container}' is running",
+                    }
                     logger.info(
                         "Sandbox tools enabled for container: %s (all execution runs in sandbox)",
                         self.sandbox_container,
                     )
             except docker.errors.NotFound:
+                self.capability_status["sandbox"] = {
+                    "available": False,
+                    "reason": f"container '{self.sandbox_container}' not found",
+                }
                 logger.warning(
                     "Sandbox container '%s' not found. Sandbox tools disabled.",
                     self.sandbox_container,
                 )
             except Exception as exc:  # noqa: BLE001
+                self.capability_status["sandbox"] = {
+                    "available": False,
+                    "reason": f"docker sandbox lookup failed: {exc}",
+                }
                 logger.warning("Sandbox container '%s' not available: %s", self.sandbox_container, exc)
         except ImportError:
+            self.capability_status["sandbox"] = {
+                "available": False,
+                "reason": "python docker package not installed",
+            }
             logger.debug("docker package not available, skipping sandbox tools")
         except Exception as exc:  # noqa: BLE001
+            self.capability_status["sandbox"] = {
+                "available": False,
+                "reason": f"docker client unavailable: {exc}",
+            }
             logger.warning("Docker not available, skipping sandbox tools: %s", exc)
 
         if self.mcp.get_server_status().get("puppeteer", {}).get("status") == "running":
@@ -247,3 +292,6 @@ class MCPToolsIntegration:
             tool_names.add(namespaced_name)
 
         return tools
+
+    def get_capability_status(self) -> dict[str, dict[str, str | bool]]:
+        return dict(self.capability_status)

@@ -1,8 +1,11 @@
 import asyncio
+import json
 import logging
 import os
 import threading
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from typing import Any
 import yaml
 from dotenv import load_dotenv
 
@@ -110,6 +113,14 @@ async def async_main(config: AppConfig) -> None:
     mcp_tools = MCPToolsIntegration(mcp_manager)
     tools = mcp_tools.create_curated_tools()
     logger.info("✓ Created %s tools", len(tools))
+    capability_snapshot = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "tool_count": len(tools),
+        "capabilities": mcp_tools.get_capability_status(),
+        "mcp_servers": status,
+    }
+    _log_degraded_capabilities(capability_snapshot)
+    _publish_runtime_capabilities(config, capability_snapshot)
 
     agents_config = resolve_config_file("agents.yaml")
     personality_config = resolve_config_file("personality.yaml")
@@ -183,6 +194,45 @@ async def async_main(config: AppConfig) -> None:
     # compatibility with phase-1 smoke checks
     if config.startup_warmup_enabled:
         personality_manager.adjust_trait("demo-user", "warmth", 1)
+
+
+def _log_degraded_capabilities(snapshot: dict[str, Any]) -> None:
+    capabilities = snapshot.get("capabilities", {}) or {}
+    for capability_name, payload in capabilities.items():
+        available = bool(payload.get("available", False))
+        reason = str(payload.get("reason", "unknown"))
+        if available:
+            logger.info("Capability '%s' available: %s", capability_name, reason)
+        else:
+            logger.warning("Capability '%s' degraded: %s", capability_name, reason)
+
+    for server_name, state in (snapshot.get("mcp_servers", {}) or {}).items():
+        status = str(state.get("status", "unknown"))
+        message = str(state.get("message", ""))
+        if status == "running":
+            logger.info("MCP server '%s' running: %s", server_name, message)
+        elif status == "disabled":
+            logger.info("MCP server '%s' disabled: %s", server_name, message)
+        else:
+            logger.warning("MCP server '%s' unavailable (%s): %s", server_name, status, message)
+
+
+def _publish_runtime_capabilities(config: AppConfig, snapshot: dict[str, Any]) -> None:
+    try:
+        import redis
+
+        redis_client = redis.Redis(
+            host=config.redis_host,
+            port=config.redis_port,
+            password=config.redis_password,
+            decode_responses=True,
+        )
+        payload = json.dumps(snapshot)
+        redis_client.set("her:runtime:capabilities", payload)
+        redis_client.lpush("her:runtime:capabilities:history", payload)
+        redis_client.ltrim("her:runtime:capabilities:history", 0, 99)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Failed to publish runtime capabilities to Redis: %s", exc)
 
 
 def main() -> None:

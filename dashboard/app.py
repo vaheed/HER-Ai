@@ -220,6 +220,23 @@ def get_recent_chats(redis_client, limit: int = 100) -> list[dict[str, Any]]:
         return []
 
 
+def get_runtime_capabilities(redis_client) -> dict[str, Any]:
+    """Get runtime capability status snapshot from Redis."""
+    if not redis_client:
+        return {}
+    try:
+        raw = redis_client.get("her:runtime:capabilities")
+        if not raw:
+            return {}
+        payload = json.loads(raw)
+        if isinstance(payload, dict):
+            return payload
+        return {}
+    except Exception as exc:
+        st.warning(f"Error fetching runtime capabilities: {exc}")
+        return {}
+
+
 def format_log_entry(entry: str) -> dict[str, Any]:
     """Parse log entry."""
     try:
@@ -267,6 +284,7 @@ pg_conn = get_postgres_connection()
 metrics = get_metrics(redis_client)
 memory_stats = get_memory_stats(pg_conn)
 recent_chats = get_recent_chats(redis_client, limit=50)
+runtime_capabilities = get_runtime_capabilities(redis_client)
 
 if page == "Overview":
     st.title("📊 Overview Dashboard")
@@ -329,6 +347,54 @@ if page == "Overview":
     with status_col3:
         st.write("**Last Updated**")
         st.write(datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"))
+
+    st.markdown("---")
+    st.subheader("🧭 Capability Status")
+    capabilities = runtime_capabilities.get("capabilities", {})
+    mcp_servers = runtime_capabilities.get("mcp_servers", {})
+
+    cap_col1, cap_col2, cap_col3 = st.columns(3)
+    internet = capabilities.get("internet", {})
+    sandbox = capabilities.get("sandbox", {})
+    mcp_running = sum(1 for item in mcp_servers.values() if item.get("status") == "running")
+    mcp_total = len(mcp_servers)
+
+    with cap_col1:
+        if internet.get("available") is True:
+            st.success("Internet: Available")
+        elif internet:
+            st.warning("Internet: Degraded")
+        else:
+            st.info("Internet: Unknown")
+        if internet.get("reason"):
+            st.caption(str(internet.get("reason")))
+
+    with cap_col2:
+        if sandbox.get("available") is True:
+            st.success("Sandbox: Available")
+        elif sandbox:
+            st.warning("Sandbox: Degraded")
+        else:
+            st.info("Sandbox: Unknown")
+        if sandbox.get("reason"):
+            st.caption(str(sandbox.get("reason")))
+
+    with cap_col3:
+        if mcp_total == 0:
+            st.info("MCP: Not reported")
+        elif mcp_running == mcp_total:
+            st.success(f"MCP: {mcp_running}/{mcp_total} running")
+        else:
+            st.warning(f"MCP: {mcp_running}/{mcp_total} running")
+
+    if mcp_servers:
+        with st.expander("MCP server details"):
+            for server_name, server_state in mcp_servers.items():
+                server_status = str(server_state.get("status", "unknown"))
+                server_msg = str(server_state.get("message", ""))
+                st.write(f"- `{server_name}`: **{server_status}** - {server_msg}")
+    else:
+        st.info("No runtime capability snapshot published yet.")
 
 elif page == "Logs":
     st.title("📋 System Logs")
@@ -707,6 +773,16 @@ elif page == "System Health":
         st.write(f"**Redis Host:** {REDIS_HOST}")
         st.write(f"**Postgres DB:** {POSTGRES_DB}")
         st.write(f"**Last Check:** {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}")
+
+    st.markdown("---")
+    st.subheader("Runtime Capability Snapshot")
+    if runtime_capabilities:
+        st.json(runtime_capabilities)
+    else:
+        st.info(
+            "No capability snapshot found. The bot publishes this under "
+            "`her:runtime:capabilities` after startup."
+        )
 
 # Auto-refresh
 if auto_refresh:

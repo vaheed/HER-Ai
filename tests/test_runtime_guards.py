@@ -209,14 +209,13 @@ def test_runtime_capability_degradation_is_logged_and_published() -> None:
     assert "Runtime Capability Snapshot" in dashboard_source
 
 
-def test_mcp_profiles_force_stdio_transport() -> None:
+def test_mcp_profiles_avoid_legacy_transport_flags() -> None:
     for profile_path in ("config/mcp_servers.yaml", "config/mcp_servers.local.yaml"):
         profile = yaml.safe_load(Path(profile_path).read_text())
         for server in profile.get("servers", []):
             args = server.get("args", [])
             if server.get("command") != "npx":
                 continue
-            assert "--transport" in args
-            transport_idx = args.index("--transport")
-            assert transport_idx + 1 < len(args)
-            assert args[transport_idx + 1] == "stdio"
+            # Legacy "--transport stdio" breaks several modern MCP npm servers
+            # by being interpreted as positional path/URL args.
+            assert "--transport" not in args

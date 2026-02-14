@@ -48,7 +48,7 @@ Default MCP profile in this repo: `config/mcp_servers.yaml`
 
 - Enabled by default: `fetch`, `filesystem`, `postgres`, `memory`, `sequential-thinking`, `pdf`
 - Disabled by default: `puppeteer`
-- All Node MCP servers are configured with `--transport stdio` to prevent non-JSON log output from breaking stdio JSON-RPC.
+- Node MCP server args in this repo intentionally avoid legacy `--transport stdio` flags because current npm MCP packages often treat that flag as positional input (for example, filesystem path or database URL) and fail startup.
 
 Required environment variables for this profile are documented in `.env.example`:
 `POSTGRES_URL` (`BRAVE_API_KEY` only if enabling `brave-search`).

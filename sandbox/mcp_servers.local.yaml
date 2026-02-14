@@ -5,8 +5,6 @@ servers:
     args:
       - -y
       - "@modelcontextprotocol/server-filesystem"
-      - --transport
-      - stdio
       - /workspace
     env: {}
     description: "Local filesystem access inside sandbox workspace"
@@ -17,8 +15,6 @@ servers:
     args:
       - -y
       - "mcp-fetch-server"
-      - --transport
-      - stdio
     env: {}
     description: "HTTP fetch for docs, APIs, and web content"
 
@@ -28,8 +24,6 @@ servers:
     args:
       - -y
       - "@modelcontextprotocol/server-memory"
-      - --transport
-      - stdio
     env: {}
     description: "Simple knowledge-graph memory MCP server"
 
@@ -39,8 +33,6 @@ servers:
     args:
       - -y
       - "@modelcontextprotocol/server-sequential-thinking"
-      - --transport
-      - stdio
     env: {}
     description: "Structured reasoning helper"
 
@@ -50,7 +42,5 @@ servers:
     args:
       - -y
       - "@modelcontextprotocol/server-pdf"
-      - --transport
-      - stdio
     env: {}
     description: "Parse and extract text from local PDF documents"

@@ -5,8 +5,6 @@ servers:
     args:
       - -y
       - "mcp-fetch-server"
-      - --transport
-      - stdio
     env: {}
     description: "HTTP fetch for websites/APIs (internet access without API key)"
 
@@ -16,8 +14,6 @@ servers:
     args:
       - -y
       - "@modelcontextprotocol/server-brave-search"
-      - --transport
-      - stdio
     env:
       BRAVE_API_KEY: "${BRAVE_API_KEY}"
     description: "Optional Brave web search (requires BRAVE_API_KEY)"
@@ -28,8 +24,6 @@ servers:
     args:
       - -y
       - "@modelcontextprotocol/server-filesystem"
-      - --transport
-      - stdio
       - /workspace
     env: {}
     description: "Read/write files in workspace"
@@ -40,8 +34,6 @@ servers:
     args:
       - -y
       - "@modelcontextprotocol/server-postgres"
-      - --transport
-      - stdio
       - "${POSTGRES_URL}"
     env:
       DATABASE_URL: "${POSTGRES_URL}"
@@ -53,8 +45,6 @@ servers:
     args:
       - -y
       - "@modelcontextprotocol/server-puppeteer"
-      - --transport
-      - stdio
     env: {}
     description: "Browser automation"
 
@@ -64,8 +54,6 @@ servers:
     args:
       - -y
       - "@modelcontextprotocol/server-memory"
-      - --transport
-      - stdio
     env: {}
     description: "Knowledge graph storage"
 
@@ -75,8 +63,6 @@ servers:
     args:
       - -y
       - "@modelcontextprotocol/server-sequential-thinking"
-      - --transport
-      - stdio
     env: {}
     description: "Structured reasoning helper"
 
@@ -86,7 +72,5 @@ servers:
     args:
       - -y
       - "@modelcontextprotocol/server-pdf"
-      - --transport
-      - stdio
     env: {}
     description: "Parse and extract text from local PDF documents"

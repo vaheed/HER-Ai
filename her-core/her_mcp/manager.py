@@ -37,6 +37,29 @@ class MCPManager:
     def _expand_env(self, value: str) -> str:
         return Template(value).safe_substitute(os.environ)
 
+    @staticmethod
+    def _normalize_legacy_stdio_args(command: str, args: list[str]) -> list[str]:
+        """Remove legacy transport flags that break modern MCP server CLIs."""
+        if command != "npx":
+            return list(args)
+
+        normalized: list[str] = []
+        idx = 0
+        while idx < len(args):
+            token = args[idx]
+            if token == "--transport":
+                # Legacy config used "--transport stdio" for Node servers.
+                # Many current MCP npm packages do not support this flag and
+                # interpret it as positional input (path/URL), causing startup failures.
+                next_token = args[idx + 1] if idx + 1 < len(args) else None
+                if next_token == "stdio":
+                    idx += 2
+                    continue
+                idx += 1
+                continue
+            normalized.append(token)
+            idx += 1
+        return normalized
 
     @staticmethod
     def _command_exists(command: str) -> bool:
@@ -69,6 +92,7 @@ class MCPManager:
             # Expand env vars in args (e.g. ${POSTGRES_URL}) for servers that need URLs as CLI args
             raw_args = config.get("args", [])
             args = [self._expand_env(str(a)) for a in raw_args]
+            args = self._normalize_legacy_stdio_args(command, args)
 
             params = StdioServerParameters(
                 command=command,

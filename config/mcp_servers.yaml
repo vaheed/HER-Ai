@@ -34,6 +34,7 @@ servers:
     args:
       - -y
       - "@modelcontextprotocol/server-postgres"
+      - "${POSTGRES_URL}"
     env:
       DATABASE_URL: "${POSTGRES_URL}"
     description: "Query memory database"

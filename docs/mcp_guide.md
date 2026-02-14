@@ -34,6 +34,7 @@ The repository currently includes a concrete MCP implementation used by startup 
 - `her-core/her_mcp/manager.py`
   - Loads `config/mcp_servers.yaml`
   - Starts enabled MCP servers
+  - Detects unresolved `${ENV_VAR}` placeholders in MCP args/env and marks that server as unavailable with a clear missing-variable message
   - Caches tool metadata
   - Exposes `call_tool()`, `get_all_tools()`, and `get_server_status()`
 - `her-core/her_mcp/tools.py`

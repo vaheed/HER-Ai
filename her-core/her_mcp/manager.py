@@ -2,6 +2,7 @@ import asyncio
 import contextlib
 import logging
 import os
+import re
 import shutil
 from pathlib import Path
 from string import Template
@@ -13,6 +14,7 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 logger = logging.getLogger(__name__)
+_UNRESOLVED_ENV_PATTERN = re.compile(r"\$\{([^}]+)\}")
 
 
 class MCPManager:
@@ -36,6 +38,10 @@ class MCPManager:
 
     def _expand_env(self, value: str) -> str:
         return Template(value).safe_substitute(os.environ)
+
+    @staticmethod
+    def _find_unresolved_placeholders(value: str) -> list[str]:
+        return _UNRESOLVED_ENV_PATTERN.findall(value)
 
     @staticmethod
     def _normalize_legacy_stdio_args(command: str, args: list[str]) -> list[str]:
@@ -86,13 +92,26 @@ class MCPManager:
                 return
 
             merged_env = os.environ.copy()
+            unresolved_keys: set[str] = set()
             for key, value in (config.get("env") or {}).items():
-                merged_env[key] = self._expand_env(str(value))
+                expanded_value = self._expand_env(str(value))
+                unresolved_keys.update(self._find_unresolved_placeholders(expanded_value))
+                merged_env[key] = expanded_value
 
             # Expand env vars in args (e.g. ${POSTGRES_URL}) for servers that need URLs as CLI args
             raw_args = config.get("args", [])
             args = [self._expand_env(str(a)) for a in raw_args]
+            for arg in args:
+                unresolved_keys.update(self._find_unresolved_placeholders(arg))
             args = self._normalize_legacy_stdio_args(command, args)
+            if unresolved_keys:
+                missing = ", ".join(sorted(unresolved_keys))
+                self.server_status[name] = {
+                    "status": "unavailable",
+                    "message": f"missing required environment variable(s): {missing}",
+                }
+                logger.warning("Skipping MCP server '%s': unresolved env placeholders: %s", name, missing)
+                return
 
             params = StdioServerParameters(
                 command=command,

@@ -219,3 +219,9 @@ def test_mcp_profiles_avoid_legacy_transport_flags() -> None:
             # Legacy "--transport stdio" breaks several modern MCP npm servers
             # by being interpreted as positional path/URL args.
             assert "--transport" not in args
+
+
+def test_mcp_manager_reports_missing_env_placeholders_clearly() -> None:
+    source = Path("her-core/her_mcp/manager.py").read_text()
+    assert "_find_unresolved_placeholders" in source
+    assert "missing required environment variable(s)" in source

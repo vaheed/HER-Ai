@@ -2,6 +2,7 @@ import asyncio
 import logging
 import re
 import time
+from typing import Any
 from typing import Final
 
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -11,7 +12,7 @@ from telegram.error import NetworkError, TimedOut
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
 from config import AppConfig
-from memory import HERMemory, RedisContextStore, initialize_database
+from memory import FallbackMemory, HERMemory, RedisContextStore, initialize_database
 from utils.llm_factory import build_llm
 from utils.metrics import HERMetrics
 from utils.retry import RetryError, with_retry
@@ -63,7 +64,7 @@ def _extract_retry_after_seconds(message: str) -> int | None:
     return None
 
 
-def build_application(config: AppConfig, memory: HERMemory, metrics: HERMetrics) -> Application:
+def build_application(config: AppConfig, memory: HERMemory | Any, metrics: HERMetrics) -> Application:
     llm = build_llm()
     if not config.telegram_bot_token:
         raise ValueError("TELEGRAM_BOT_TOKEN is required to start the Telegram bot.")
@@ -204,7 +205,10 @@ def run_bot() -> None:
     logging.basicConfig(level=logging.INFO)
     config = AppConfig()
 
-    initialize_database(config)
+    try:
+        initialize_database(config)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Database initialization failed; continuing with degraded memory mode: %s", exc)
 
     redis_store = RedisContextStore(
         host=config.redis_host,
@@ -212,7 +216,11 @@ def run_bot() -> None:
         password=config.redis_password,
         ttl_seconds=86400,
     )
-    memory = HERMemory(config, redis_store)
+    try:
+        memory = HERMemory(config, redis_store)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Long-term memory unavailable; using in-process fallback memory: %s", exc)
+        memory = FallbackMemory()
     metrics = HERMetrics(
         host=config.redis_host,
         port=config.redis_port,

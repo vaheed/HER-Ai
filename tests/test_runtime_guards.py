@@ -225,3 +225,16 @@ def test_mcp_manager_reports_missing_env_placeholders_clearly() -> None:
     source = Path("her-core/her_mcp/manager.py").read_text()
     assert "_find_unresolved_placeholders" in source
     assert "missing required environment variable(s)" in source
+
+
+def test_memory_degrades_to_fallback_when_backends_are_unavailable() -> None:
+    main_source = Path("her-core/main.py").read_text()
+    telegram_source = Path("her-core/telegram_bot.py").read_text()
+    memory_init_source = Path("her-core/memory/__init__.py").read_text()
+    redis_source = Path("her-core/memory/redis_client.py").read_text()
+
+    assert "FallbackMemory" in main_source
+    assert "degraded memory mode" in main_source
+    assert "FallbackMemory" in telegram_source
+    assert "FallbackMemory" in memory_init_source
+    assert "_fallback_cache" in redis_source

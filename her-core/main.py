@@ -13,7 +13,7 @@ from agents import ConversationAgent, PersonalityAgent, ReflectionAgent
 from config import AppConfig
 from her_mcp.manager import MCPManager
 from her_mcp.tools import MCPToolsIntegration
-from memory import HERMemory, RedisContextStore, initialize_database
+from memory import FallbackMemory, HERMemory, RedisContextStore, initialize_database
 from her_telegram.bot import HERBot
 from her_telegram.rate_limiter import RateLimiter
 from utils.config_paths import resolve_config_file
@@ -98,9 +98,17 @@ async def async_main(config: AppConfig) -> None:
         password=config.redis_password,
         ttl_seconds=86400,
     )
-    initialize_database(config)
-    memory = HERMemory(config, redis_store)
-    logger.info("✓ Memory system initialized")
+    try:
+        initialize_database(config)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Database initialization failed; continuing with degraded memory mode: %s", exc)
+
+    try:
+        memory = HERMemory(config, redis_store)
+        logger.info("✓ Memory system initialized")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Long-term memory unavailable; using in-process fallback memory: %s", exc)
+        memory = FallbackMemory()
 
     logger.info("Initializing MCP servers...")
     mcp_config_path = os.getenv("MCP_CONFIG_PATH", "mcp_servers.yaml")

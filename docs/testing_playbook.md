@@ -136,8 +136,8 @@ sed -n '1,200p' config/mcp_servers.yaml
 ```
 
 Expected:
-- `brave-search`, `filesystem`, `postgres`, `memory` enabled by default.
-- `puppeteer` disabled by default unless you explicitly enable it.
+- `fetch`, `filesystem`, `postgres`, `memory`, `sequential-thinking`, and `pdf` enabled by default.
+- `brave-search` and `puppeteer` disabled by default unless you explicitly enable them.
 
 ### 6.2 Web-search intent test (Telegram)
 

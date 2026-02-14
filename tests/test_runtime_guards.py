@@ -193,3 +193,30 @@ def test_sandbox_security_and_network_tools_are_registered() -> None:
     assert "class SandboxSecurityScanTool" in sandbox_source
     assert "SandboxNetworkTool" in tools_source
     assert "SandboxSecurityScanTool" in tools_source
+
+
+def test_runtime_capability_degradation_is_logged_and_published() -> None:
+    main_source = Path("her-core/main.py").read_text()
+    tools_source = Path("her-core/her_mcp/tools.py").read_text()
+    dashboard_source = Path("dashboard/app.py").read_text()
+
+    assert "_publish_runtime_capabilities" in main_source
+    assert "her:runtime:capabilities" in main_source
+    assert "_log_degraded_capabilities" in main_source
+    assert "_probe_internet_access" in tools_source
+    assert "self.capability_status" in tools_source
+    assert "get_runtime_capabilities" in dashboard_source
+    assert "Runtime Capability Snapshot" in dashboard_source
+
+
+def test_mcp_profiles_force_stdio_transport() -> None:
+    for profile_path in ("config/mcp_servers.yaml", "config/mcp_servers.local.yaml"):
+        profile = yaml.safe_load(Path(profile_path).read_text())
+        for server in profile.get("servers", []):
+            args = server.get("args", [])
+            if server.get("command") != "npx":
+                continue
+            assert "--transport" in args
+            transport_idx = args.index("--transport")
+            assert transport_idx + 1 < len(args)
+            assert args[transport_idx + 1] == "stdio"

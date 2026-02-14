@@ -9,6 +9,7 @@ The HER Admin Dashboard is a comprehensive Streamlit application that provides r
 - **Recent Activity**: Latest user interactions and events
 - **Memory Categories**: Visual breakdown of memory types
 - **System Status**: Service connectivity and environment info
+- **Capability Status**: Internet, sandbox, and MCP availability with explicit degradation reasons
 
 ### 📋 Logs Page
 - **Real-time System Logs**: View all application logs from Redis
@@ -51,6 +52,7 @@ The HER Admin Dashboard is a comprehensive Streamlit application that provides r
 - **Service Information**: Version info, memory usage, connection status
 - **Environment Info**: Configuration and environment variables
 - **Health Checks**: Real-time service health monitoring
+- **Runtime Snapshot**: Raw startup capability payload from `her:runtime:capabilities`
 
 ## Access
 
@@ -90,6 +92,8 @@ TZ=UTC
 - `her:logs` - System logs (last 200)
 - `her:sandbox:executions` - Sandbox execution history (last 100)
 - `her:scheduler:jobs` - Scheduled job history (last 100)
+- `her:runtime:capabilities` - Latest startup capability snapshot (internet/sandbox/MCP)
+- `her:runtime:capabilities:history` - Capability snapshot history (last 100)
 
 ### PostgreSQL Tables
 - `memories` - Long-term memory storage

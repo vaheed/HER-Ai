@@ -41,7 +41,15 @@ class HERBot:
         self.app = None
 
     async def start(self):
-        self.app = Application.builder().token(self.token).build()
+        self.app = (
+            Application.builder()
+            .token(self.token)
+            .connect_timeout(20.0)
+            .read_timeout(30.0)
+            .write_timeout(30.0)
+            .pool_timeout(20.0)
+            .build()
+        )
 
         self.app.add_handler(CommandHandler("start", self.handlers.start_command))
         self.app.add_handler(CommandHandler("help", self.handlers.help_command))

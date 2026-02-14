@@ -38,6 +38,7 @@ The repository currently includes a concrete MCP implementation used by startup 
   - Exposes `call_tool()`, `get_all_tools()`, and `get_server_status()`
 - `her-core/her_mcp/tools.py`
   - Wraps curated MCP actions as CrewAI tools (`web_search`, `read_file`, `write_file`, `query_database`, optional `navigate_browser`)
+  - Adds sandbox-native no-key ops tools: `sandbox_execute`, `sandbox_python`, `sandbox_web`, `sandbox_network`, `sandbox_security_scan`, `sandbox_test`, `sandbox_report`
 - `her-core/her_mcp/helpers.py`
   - Async convenience wrappers for web/file operations
 - `her-core/main.py`
@@ -45,11 +46,13 @@ The repository currently includes a concrete MCP implementation used by startup 
 
 Default MCP profile in this repo: `config/mcp_servers.yaml`
 
-- Enabled by default: `filesystem`, `postgres`, `memory` (and `brave-search` is optional)
+- Enabled by default: `fetch`, `filesystem`, `postgres`, `memory`, `sequential-thinking`, `pdf`
 - Disabled by default: `puppeteer`
 
 Required environment variables for this profile are documented in `.env.example`:
 `POSTGRES_URL` (`BRAVE_API_KEY` only if enabling `brave-search`).
+You can switch profiles with `MCP_CONFIG_PATH` (for example: `mcp_servers.local.yaml`).
+Global timezone is set with `TZ` (default `UTC`) and passed to all runtime containers in `docker-compose.yml`.
 
 ## ✅ Ready-to-use local MCP profile
 

@@ -152,3 +152,44 @@ def test_mcp_startup_cancellation_re_raises_and_cleans_up_stack() -> None:
     assert "except asyncio.CancelledError as exc" in source
     assert "await stack.aclose()" in source
     assert "raise" in source
+
+
+def test_scheduler_uses_time_module_for_execution_timing() -> None:
+    source = Path("her-core/utils/scheduler.py").read_text()
+    assert "import time" in source
+    assert "time.time()" in source
+
+
+def test_mcp_profile_path_is_configurable_via_env() -> None:
+    main_source = Path("her-core/main.py").read_text()
+    env_example = Path(".env.example").read_text()
+
+    assert 'os.getenv("MCP_CONFIG_PATH", "mcp_servers.yaml")' in main_source
+    assert "MCP_CONFIG_PATH=mcp_servers.yaml" in env_example
+    assert "SANDBOX_CONTAINER_NAME=her-sandbox" in env_example
+
+
+def test_dashboard_handles_mem0_schema_and_recent_chats() -> None:
+    source = Path("dashboard/app.py").read_text()
+    assert "conn.autocommit = True" in source
+    assert "payload->'metadata'->>'category'" in source
+    assert 'scan_iter(match="her:context:*"' in source
+
+
+def test_timezone_is_configured_project_wide() -> None:
+    compose_source = Path("docker-compose.yml").read_text()
+    env_example = Path(".env.example").read_text()
+
+    assert "TZ=UTC" in env_example
+    assert "TZ: ${TZ:-UTC}" in compose_source
+    assert "- TZ" in compose_source
+
+
+def test_sandbox_security_and_network_tools_are_registered() -> None:
+    sandbox_source = Path("her-core/her_mcp/sandbox_tools.py").read_text()
+    tools_source = Path("her-core/her_mcp/tools.py").read_text()
+
+    assert "class SandboxNetworkTool" in sandbox_source
+    assert "class SandboxSecurityScanTool" in sandbox_source
+    assert "SandboxNetworkTool" in tools_source
+    assert "SandboxSecurityScanTool" in tools_source

@@ -16,6 +16,11 @@ The HER Admin Dashboard is a comprehensive Streamlit application that provides r
 - **Search**: Search logs by keyword
 - **Auto-refresh**: Automatically update logs at configurable intervals
 
+### 💬 Recent Chats Page
+- **Recent Interaction Events**: User messages + assistant responses from `her:metrics:events`
+- **Redis Context Threads**: Latest context snippets from `her:context:*`
+- **Quick Debugging**: Validate whether chat history is being persisted
+
 ### 🔧 Executors Page
 - **Sandbox Execution History**: View all sandbox command executions
 - **Execution Details**: Command, output, errors, execution time, exit codes
@@ -39,6 +44,7 @@ The HER Admin Dashboard is a comprehensive Streamlit application that provides r
 - **Category Breakdown**: Visual charts of memory categories
 - **Memory Creation Trends**: Daily memory creation over last 30 days
 - **Memory Search**: Search memories by keyword with full-text search
+- **Schema Compatibility**: Supports both legacy memory schema and Mem0 payload schema
 
 ### 🏥 System Health Page
 - **Service Status**: Redis and PostgreSQL connectivity
@@ -70,6 +76,7 @@ POSTGRES_PORT=5432
 POSTGRES_USER=her
 POSTGRES_PASSWORD=your_password
 POSTGRES_DB=her_memory
+TZ=UTC
 ```
 
 ## Data Sources
@@ -87,6 +94,7 @@ POSTGRES_DB=her_memory
 ### PostgreSQL Tables
 - `memories` - Long-term memory storage
 - Memory statistics and search queries
+- `conversation_logs` - Optional conversation timeline (if enabled by runtime)
 
 ## Auto-Refresh
 

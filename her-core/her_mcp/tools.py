@@ -11,8 +11,10 @@ from langchain_core.tools import BaseTool
 from her_mcp.manager import MCPManager
 from her_mcp.sandbox_tools import (
     SandboxCommandTool,
+    SandboxNetworkTool,
     SandboxPythonTool,
     SandboxReportTool,
+    SandboxSecurityScanTool,
     SandboxTestTool,
     SandboxWebTool,
 )
@@ -122,34 +124,46 @@ class MCPToolsIntegration:
         self.sandbox_container = os.getenv("SANDBOX_CONTAINER_NAME", "her-sandbox")
 
     def create_curated_tools(self) -> list[BaseTool]:
-        tools: list[BaseTool] = [
-            CurlWebSearchTool(),
-            MCPTool(
-                name="read_file",
-                description="Read a file from the workspace filesystem.",
-                mcp_manager=self.mcp,
-                server_name="filesystem",
-                tool_name="read_file",
-            ),
-            MCPTool(
-                name="write_file",
-                description="Write content to a file in the workspace filesystem.",
-                mcp_manager=self.mcp,
-                server_name="filesystem",
-                tool_name="write_file",
-            ),
-            MCPTool(
+        status = self.mcp.get_server_status()
+        tools: list[BaseTool] = [CurlWebSearchTool()]
+        tool_names: set[str] = {tools[0].name}
+
+        if status.get("filesystem", {}).get("status") == "running":
+            filesystem_tools = [
+                MCPTool(
+                    name="read_file",
+                    description="Read a file from the workspace filesystem.",
+                    mcp_manager=self.mcp,
+                    server_name="filesystem",
+                    tool_name="read_file",
+                ),
+                MCPTool(
+                    name="write_file",
+                    description="Write content to a file in the workspace filesystem.",
+                    mcp_manager=self.mcp,
+                    server_name="filesystem",
+                    tool_name="write_file",
+                ),
+            ]
+            tools.extend(filesystem_tools)
+            tool_names.update(tool.name for tool in filesystem_tools)
+
+        if status.get("postgres", {}).get("status") == "running":
+            db_tool = MCPTool(
                 name="query_database",
                 description="Run SQL queries against the memory PostgreSQL database.",
                 mcp_manager=self.mcp,
                 server_name="postgres",
                 tool_name="query",
-            ),
-        ]
+            )
+            tools.append(db_tool)
+            tool_names.add(db_tool.name)
 
         # Add Twitter tools if available
         if TwitterTool and TwitterConfigTool:
-            tools.extend([TwitterTool(), TwitterConfigTool()])
+            twitter_tools = [TwitterTool(), TwitterConfigTool()]
+            tools.extend(twitter_tools)
+            tool_names.update(tool.name for tool in twitter_tools)
 
         # Add sandbox tools if Docker socket is available and sandbox container exists
         # All sandbox execution runs in the isolated 'her-sandbox' container via Docker exec
@@ -168,13 +182,17 @@ class MCPToolsIntegration:
                     )
                 else:
                     # Sandbox is available and running, add tools
-                    tools.extend([
+                    sandbox_tools = [
                         SandboxCommandTool(container_name=self.sandbox_container),
                         SandboxPythonTool(container_name=self.sandbox_container),
                         SandboxWebTool(container_name=self.sandbox_container),
+                        SandboxNetworkTool(container_name=self.sandbox_container),
+                        SandboxSecurityScanTool(container_name=self.sandbox_container),
                         SandboxTestTool(container_name=self.sandbox_container),
                         SandboxReportTool(container_name=self.sandbox_container),
-                    ])
+                    ]
+                    tools.extend(sandbox_tools)
+                    tool_names.update(tool.name for tool in sandbox_tools)
                     logger.info(
                         "Sandbox tools enabled for container: %s (all execution runs in sandbox)",
                         self.sandbox_container,
@@ -192,14 +210,40 @@ class MCPToolsIntegration:
             logger.warning("Docker not available, skipping sandbox tools: %s", exc)
 
         if self.mcp.get_server_status().get("puppeteer", {}).get("status") == "running":
-            tools.append(
-                MCPTool(
-                    name="navigate_browser",
-                    description="Navigate a browser to a URL and return page context.",
-                    mcp_manager=self.mcp,
-                    server_name="puppeteer",
-                    tool_name="puppeteer_navigate",
-                )
+            browser_tool = MCPTool(
+                name="navigate_browser",
+                description="Navigate a browser to a URL and return page context.",
+                mcp_manager=self.mcp,
+                server_name="puppeteer",
+                tool_name="puppeteer_navigate",
             )
+            tools.append(browser_tool)
+            tool_names.add(browser_tool.name)
+
+        # Add all discovered MCP tools as namespaced tools so agents can access
+        # broader capabilities (network, docs, memory, pdf, reasoning, etc.).
+        for tool_meta in self.mcp.get_all_tools():
+            server_name = str(tool_meta.get("server", "")).strip()
+            raw_tool_name = str(tool_meta.get("name", "")).strip()
+            if not server_name or not raw_tool_name:
+                continue
+
+            namespaced_name = f"mcp_{server_name}_{raw_tool_name}".replace("-", "_")
+            if namespaced_name in tool_names:
+                continue
+
+            description = (
+                str(tool_meta.get("description", "")).strip()
+                or f"Execute MCP tool '{raw_tool_name}' from server '{server_name}'."
+            )
+            dynamic_tool = MCPTool(
+                name=namespaced_name,
+                description=description,
+                mcp_manager=self.mcp,
+                server_name=server_name,
+                tool_name=raw_tool_name,
+            )
+            tools.append(dynamic_tool)
+            tool_names.add(namespaced_name)
 
         return tools

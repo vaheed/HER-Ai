@@ -11,7 +11,21 @@ RUN apt-get update \
         bash \
         ca-certificates \
         curl \
+        wget \
+        jq \
         git \
+        nmap \
+        whois \
+        net-tools \
+        iproute2 \
+        openssl \
+        iputils-ping \
+        dnsutils \
+        netcat-openbsd \
+        traceroute \
+        procps \
+        tree \
+        vim-tiny \
         nodejs \
         npm \
     && rm -rf /var/lib/apt/lists/*

@@ -77,6 +77,7 @@ docker compose logs -f her-bot
 - **MCP Servers**: Pre-built integrations for 1000+ services
 - **Web Search**: DuckDuckGo, Brave, Serper API via MCP
 - **Code Execution**: Python, Node.js, Bash via sandbox container
+- **Network/Security Diagnostics**: nmap, DNS tools, ping, traceroute, SSL checks (no API keys)
 - **File Operations**: Local, Google Drive, Dropbox via MCP
 - **Safe & Isolated**: All operations run in isolated Docker sandbox container
 
@@ -176,6 +177,11 @@ POSTGRES_DB=her_memory
 
 # Redis
 REDIS_PASSWORD=redis_secure_password
+
+# MCP / Sandbox
+MCP_CONFIG_PATH=mcp_servers.yaml
+SANDBOX_CONTAINER_NAME=her-sandbox
+TZ=UTC
 ```
 
 ### Configuration Files
@@ -190,6 +196,8 @@ Configuration files are located in `config/`:
 - `config/scheduler.yaml` - Scheduled tasks configuration
 
 > **📖 For detailed configuration options**, see [docs/architecture.md](docs/architecture.md#-configuration-management)
+
+Set `MCP_CONFIG_PATH=mcp_servers.local.yaml` if you want the no-key local MCP profile.
 
 ## 🧪 Testing
 

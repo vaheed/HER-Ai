@@ -12,6 +12,7 @@ Supports cron-like scheduling for:
 import asyncio
 import logging
 import os
+import time
 from datetime import datetime, timedelta
 from typing import Any, Callable
 
@@ -98,6 +99,9 @@ class TaskScheduler:
 
     def _should_run(self, now: datetime, last_run: str | None, interval: str) -> bool:
         """Check if task should run based on interval."""
+        if not interval:
+            return False
+
         if not last_run:
             return True
 

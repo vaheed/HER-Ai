@@ -1,4 +1,13 @@
 servers:
+  - name: fetch
+    enabled: true
+    command: npx
+    args:
+      - -y
+      - "mcp-fetch-server"
+    env: {}
+    description: "HTTP fetch for websites/APIs (internet access without API key)"
+
   - name: brave-search
     enabled: false
     command: npx
@@ -46,3 +55,21 @@ servers:
       - "@modelcontextprotocol/server-memory"
     env: {}
     description: "Knowledge graph storage"
+
+  - name: sequential-thinking
+    enabled: true
+    command: npx
+    args:
+      - -y
+      - "@modelcontextprotocol/server-sequential-thinking"
+    env: {}
+    description: "Structured reasoning helper"
+
+  - name: pdf
+    enabled: true
+    command: npx
+    args:
+      - -y
+      - "@modelcontextprotocol/server-pdf"
+    env: {}
+    description: "Parse and extract text from local PDF documents"

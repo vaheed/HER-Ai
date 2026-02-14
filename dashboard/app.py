@@ -12,7 +12,7 @@ Features:
 
 import json
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any
 
 import psycopg2
@@ -55,13 +55,16 @@ def get_redis_client():
 def get_postgres_connection():
     """Get PostgreSQL connection."""
     try:
-        return psycopg2.connect(
+        conn = psycopg2.connect(
             host=POSTGRES_HOST,
             port=POSTGRES_PORT,
             user=POSTGRES_USER,
             password=POSTGRES_PASSWORD,
             database=POSTGRES_DB,
         )
+        # Avoid "current transaction is aborted" after a failed query.
+        conn.autocommit = True
+        return conn
     except Exception as exc:
         st.error(f"Failed to connect to PostgreSQL: {exc}")
         return None
@@ -93,33 +96,74 @@ def get_memory_stats(pg_conn):
         return {}
     try:
         cursor = pg_conn.cursor()
+        cursor.execute(
+            """
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = 'memories'
+            """
+        )
+        memory_columns = {row[0] for row in cursor.fetchall()}
+        if not memory_columns:
+            cursor.close()
+            return {}
+
         cursor.execute("SELECT COUNT(*) FROM memories")
         total_memories = cursor.fetchone()[0]
 
-        cursor.execute("SELECT COUNT(DISTINCT user_id) FROM memories")
-        users_with_memories = cursor.fetchone()[0]
+        if "user_id" in memory_columns:
+            cursor.execute("SELECT COUNT(DISTINCT user_id) FROM memories")
+            users_with_memories = cursor.fetchone()[0]
+        elif "payload" in memory_columns:
+            cursor.execute(
+                """
+                SELECT COUNT(DISTINCT payload->>'user_id')
+                FROM memories
+                WHERE payload->>'user_id' IS NOT NULL
+                """
+            )
+            users_with_memories = cursor.fetchone()[0]
+        else:
+            users_with_memories = 0
 
-        cursor.execute(
-            """
-            SELECT category, COUNT(*) as count
-            FROM memories
-            GROUP BY category
-            ORDER BY count DESC
-            LIMIT 10
-            """
-        )
-        category_counts = {row[0]: row[1] for row in cursor.fetchall()}
+        if "category" in memory_columns:
+            cursor.execute(
+                """
+                SELECT COALESCE(category, 'uncategorized') AS category, COUNT(*) AS count
+                FROM memories
+                GROUP BY COALESCE(category, 'uncategorized')
+                ORDER BY count DESC
+                LIMIT 10
+                """
+            )
+            category_counts = {row[0]: row[1] for row in cursor.fetchall()}
+        elif "payload" in memory_columns:
+            cursor.execute(
+                """
+                SELECT COALESCE(payload->'metadata'->>'category', 'uncategorized') AS category, COUNT(*) AS count
+                FROM memories
+                GROUP BY COALESCE(payload->'metadata'->>'category', 'uncategorized')
+                ORDER BY count DESC
+                LIMIT 10
+                """
+            )
+            category_counts = {row[0]: row[1] for row in cursor.fetchall()}
+        else:
+            category_counts = {}
 
-        cursor.execute(
-            """
-            SELECT DATE(created_at) as date, COUNT(*) as count
-            FROM memories
-            WHERE created_at > NOW() - INTERVAL '30 days'
-            GROUP BY DATE(created_at)
-            ORDER BY date DESC
-            """
-        )
-        daily_memories = {str(row[0]): row[1] for row in cursor.fetchall()}
+        if "created_at" in memory_columns:
+            cursor.execute(
+                """
+                SELECT DATE(created_at) AS date, COUNT(*) AS count
+                FROM memories
+                WHERE created_at > NOW() - INTERVAL '30 days'
+                GROUP BY DATE(created_at)
+                ORDER BY date DESC
+                """
+            )
+            daily_memories = {str(row[0]): row[1] for row in cursor.fetchall()}
+        else:
+            daily_memories = {}
 
         cursor.close()
         return {
@@ -129,8 +173,51 @@ def get_memory_stats(pg_conn):
             "daily_memories": daily_memories,
         }
     except Exception as exc:
+        try:
+            pg_conn.rollback()
+        except Exception:
+            pass
         st.warning(f"Error fetching memory stats: {exc}")
         return {}
+
+
+def get_recent_chats(redis_client, limit: int = 100) -> list[dict[str, Any]]:
+    """Get recent chat snippets from Redis context keys."""
+    if not redis_client:
+        return []
+    try:
+        chats: list[dict[str, Any]] = []
+        for key in redis_client.scan_iter(match="her:context:*", count=200):
+            entries = redis_client.lrange(key, 0, 5)
+            if not entries:
+                continue
+            last_message = ""
+            last_role = ""
+            for raw in entries:
+                try:
+                    item = json.loads(raw)
+                except Exception:
+                    continue
+                if isinstance(item, dict):
+                    last_role = str(item.get("role", "unknown"))
+                    last_message = str(item.get("message", ""))
+                    if last_message:
+                        break
+            chats.append(
+                {
+                    "context_key": key,
+                    "last_role": last_role or "unknown",
+                    "last_message": (last_message or "")[:200],
+                    "message_count": redis_client.llen(key),
+                }
+            )
+            if len(chats) >= limit:
+                break
+        chats.sort(key=lambda c: c["message_count"], reverse=True)
+        return chats
+    except Exception as exc:
+        st.warning(f"Error fetching recent chats: {exc}")
+        return []
 
 
 def format_log_entry(entry: str) -> dict[str, Any]:
@@ -158,6 +245,7 @@ with st.sidebar:
         "Select Page",
         [
             "Overview",
+            "Recent Chats",
             "Logs",
             "Executors",
             "Jobs",
@@ -178,6 +266,7 @@ redis_client = get_redis_client()
 pg_conn = get_postgres_connection()
 metrics = get_metrics(redis_client)
 memory_stats = get_memory_stats(pg_conn)
+recent_chats = get_recent_chats(redis_client, limit=50)
 
 if page == "Overview":
     st.title("📊 Overview Dashboard")
@@ -287,6 +376,38 @@ elif page == "Logs":
         st.info(f"Showing {len(filtered_logs)} of {len(logs)} log entries")
     else:
         st.info("No logs available. Logs are stored in Redis under 'her:logs' key.")
+
+elif page == "Recent Chats":
+    st.title("💬 Recent Chats")
+
+    events = metrics.get("events", [])
+    if events:
+        st.subheader("Recent Interaction Events")
+        for event_str in events[:50]:
+            try:
+                event = json.loads(event_str)
+                timestamp = str(event.get("timestamp", ""))[:19]
+                user_id = event.get("user_id", "unknown")
+                user_msg = str(event.get("user_message", "")).strip()
+                response_msg = str(event.get("response_message", "")).strip()
+                with st.expander(f"[{timestamp}] User {user_id}"):
+                    st.write(f"**User:** {user_msg or '(empty)'}")
+                    st.write(f"**Assistant:** {response_msg or '(empty)'}")
+                    st.write(f"**Tokens:** {event.get('token_estimate', 0)}")
+            except Exception:
+                st.text(str(event_str)[:300])
+    else:
+        st.info("No interaction events found yet.")
+
+    st.markdown("---")
+    st.subheader("Redis Context Threads")
+    if recent_chats:
+        for item in recent_chats[:50]:
+            with st.expander(f"{item['context_key']} ({item['message_count']} msgs)"):
+                st.write(f"**Last role:** {item['last_role']}")
+                st.write(f"**Last message:** {item['last_message'] or '(empty)'}")
+    else:
+        st.info("No Redis context threads found yet.")
 
 elif page == "Executors":
     st.title("🔧 Sandbox Executors")
@@ -478,16 +599,47 @@ elif page == "Memory":
                 cursor = pg_conn.cursor()
                 cursor.execute(
                     """
-                    SELECT memory_text, category, created_at, importance_score
-                    FROM memories
-                    WHERE memory_text ILIKE %s
-                    ORDER BY created_at DESC
-                    LIMIT 20
-                    """,
-                    (f"%{search_query}%",),
+                    SELECT column_name
+                    FROM information_schema.columns
+                    WHERE table_schema = 'public' AND table_name = 'memories'
+                    """
                 )
-                results = cursor.fetchall()
-                cursor.close()
+                memory_columns = {row[0] for row in cursor.fetchall()}
+
+                if "memory_text" in memory_columns:
+                    cursor.execute(
+                        """
+                        SELECT memory_text, category, created_at, importance_score
+                        FROM memories
+                        WHERE memory_text ILIKE %s
+                        ORDER BY created_at DESC
+                        LIMIT 20
+                        """,
+                        (f"%{search_query}%",),
+                    )
+                elif "payload" in memory_columns:
+                    cursor.execute(
+                        """
+                        SELECT
+                            COALESCE(payload->>'memory', payload->>'text', payload::text) AS memory_text,
+                            COALESCE(payload->'metadata'->>'category', 'uncategorized') AS category,
+                            created_at,
+                            COALESCE((payload->'metadata'->>'importance')::float, 0) AS importance_score
+                        FROM memories
+                        WHERE payload::text ILIKE %s
+                        ORDER BY created_at DESC NULLS LAST
+                        LIMIT 20
+                        """,
+                        (f"%{search_query}%",),
+                    )
+                else:
+                    st.info("Memories table is present but not in a searchable schema.")
+                    cursor.close()
+                    results = []
+
+                if "memory_text" in memory_columns or "payload" in memory_columns:
+                    results = cursor.fetchall()
+                    cursor.close()
 
                 if results:
                     for row in results:
@@ -497,6 +649,10 @@ elif page == "Memory":
                 else:
                     st.info("No memories found")
             except Exception as exc:
+                try:
+                    pg_conn.rollback()
+                except Exception:
+                    pass
                 st.error(f"Search error: {exc}")
     else:
         st.info("No memory statistics available")

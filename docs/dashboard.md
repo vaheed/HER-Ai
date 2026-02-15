@@ -2,6 +2,8 @@
 
 The HER Admin Dashboard is a comprehensive Streamlit application that provides real-time monitoring, logging, and management capabilities for the HER AI Assistant system.
 
+Charts use Plotly for responsive, interactive visuals (zoom, pan, hover, legend toggles).
+
 ## Features
 
 ### 📊 Overview Dashboard
@@ -23,6 +25,7 @@ The HER Admin Dashboard is a comprehensive Streamlit application that provides r
 - **Recent Interaction Events**: User messages + assistant responses from `her:metrics:events`
 - **Redis Context Threads**: Latest context snippets from `her:context:*`
 - **Quick Debugging**: Validate whether chat history is being persisted
+- **Redis Type Safe**: Context reads support both string-backed JSON threads and list-backed legacy keys without `WRONGTYPE` errors
 
 ### 🔧 Executors Page
 - **Sandbox Execution History**: View all sandbox command executions

@@ -7,11 +7,31 @@ from datetime import datetime, timezone
 from typing import Any
 
 import pandas as pd
+import plotly.express as px
 import psycopg2
 import redis
 import streamlit as st
 
 st.set_page_config(page_title="HER Admin Dashboard", layout="wide", initial_sidebar_state="expanded")
+
+st.markdown(
+    """
+    <style>
+      .block-container {padding-top: 1.0rem; padding-bottom: 1.0rem;}
+      .kpi-card {
+        border: 1px solid rgba(49, 51, 63, 0.2);
+        border-radius: 12px;
+        padding: 0.8rem 1rem;
+        background: #ffffff;
+      }
+      .section-note {
+        color: #5f6368;
+        font-size: 0.9rem;
+      }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 if "refresh_interval" not in st.session_state:
     st.session_state.refresh_interval = 5
@@ -81,6 +101,88 @@ def safe_json(raw: Any) -> dict[str, Any]:
     return {"raw": str(raw)}
 
 
+def _context_entries(redis_client: Any, key: str, limit: int = 20) -> list[dict[str, Any]]:
+    """Read context entries from Redis key regardless of underlying Redis type."""
+    if not redis_client:
+        return []
+    try:
+        key_type = redis_client.type(key)
+        if isinstance(key_type, bytes):
+            key_type = key_type.decode("utf-8", errors="ignore")
+
+        if key_type == "string":
+            raw_value = redis_client.get(key)
+            if not raw_value:
+                return []
+            parsed = json.loads(raw_value)
+            if isinstance(parsed, list):
+                return [item for item in parsed[:limit] if isinstance(item, dict)]
+            return []
+
+        if key_type == "list":
+            rows = redis_client.lrange(key, 0, max(0, limit - 1))
+            return [safe_json(row) for row in rows]
+    except Exception:
+        return []
+    return []
+
+
+def _context_message_count(redis_client: Any, key: str) -> int:
+    """Return message count for context keys stored as string(list) or list."""
+    if not redis_client:
+        return 0
+    try:
+        key_type = redis_client.type(key)
+        if isinstance(key_type, bytes):
+            key_type = key_type.decode("utf-8", errors="ignore")
+
+        if key_type == "string":
+            raw_value = redis_client.get(key)
+            if not raw_value:
+                return 0
+            parsed = json.loads(raw_value)
+            return len(parsed) if isinstance(parsed, list) else 0
+
+        if key_type == "list":
+            return int(redis_client.llen(key) or 0)
+    except Exception:
+        return 0
+    return 0
+
+
+def _safe_lrange(redis_client: Any, key: str, start: int, end: int) -> list[str]:
+    """Read list values while tolerating non-list Redis keys."""
+    if not redis_client:
+        return []
+    try:
+        key_type = redis_client.type(key)
+        if isinstance(key_type, bytes):
+            key_type = key_type.decode("utf-8", errors="ignore")
+        if key_type != "list":
+            return []
+        return redis_client.lrange(key, start, end)
+    except Exception:
+        return []
+
+
+def render_plotly_line(df: pd.DataFrame, x: str, y: str | list[str], title: str = "") -> None:
+    if df.empty:
+        st.info("No data available yet.")
+        return
+    fig = px.line(df, x=x, y=y, markers=True, template="plotly_white", title=title)
+    fig.update_layout(height=340, margin=dict(l=10, r=10, t=48, b=10), legend_title_text="")
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def render_plotly_bar(df: pd.DataFrame, x: str, y: str, title: str = "") -> None:
+    if df.empty:
+        st.info("No data available yet.")
+        return
+    fig = px.bar(df, x=x, y=y, template="plotly_white", title=title)
+    fig.update_layout(height=340, margin=dict(l=10, r=10, t=48, b=10))
+    st.plotly_chart(fig, use_container_width=True)
+
+
 def get_metrics(redis_client):
     if not redis_client:
         return {}
@@ -90,10 +192,10 @@ def get_metrics(redis_client):
             "total_messages": int(redis_client.get("her:metrics:messages") or 0),
             "unique_users": int(redis_client.scard("her:metrics:users") or 0),
             "last_response": redis_client.get("her:metrics:last_response"),
-            "events": redis_client.lrange("her:metrics:events", 0, 199),
-            "logs": redis_client.lrange("her:logs", 0, 399),
-            "sandbox_executions": redis_client.lrange("her:sandbox:executions", 0, 199),
-            "scheduled_jobs": redis_client.lrange("her:scheduler:jobs", 0, 199),
+            "events": _safe_lrange(redis_client, "her:metrics:events", 0, 199),
+            "logs": _safe_lrange(redis_client, "her:logs", 0, 399),
+            "sandbox_executions": _safe_lrange(redis_client, "her:sandbox:executions", 0, 199),
+            "scheduled_jobs": _safe_lrange(redis_client, "her:scheduler:jobs", 0, 199),
         }
     except Exception as exc:  # noqa: BLE001
         st.warning(f"Error fetching metrics: {exc}")
@@ -195,14 +297,15 @@ def get_recent_chats(redis_client, limit: int = 200) -> list[dict[str, Any]]:
     try:
         chats: list[dict[str, Any]] = []
         for key in redis_client.scan_iter(match="her:context:*", count=500):
-            size = redis_client.llen(key)
-            head = redis_client.lrange(key, 0, min(size, 3))
+            size = _context_message_count(redis_client, key)
+            if size <= 0:
+                continue
+            head = _context_entries(redis_client, key, limit=3)
             last_role = "unknown"
             last_message = ""
             for raw in head:
-                item = safe_json(raw)
-                role = str(item.get("role", "unknown"))
-                message = str(item.get("message", ""))
+                role = str(raw.get("role", "unknown"))
+                message = str(raw.get("message", ""))
                 if message:
                     last_role = role
                     last_message = message
@@ -239,8 +342,7 @@ def get_short_memory_stats(redis_client, recent_chats: list[dict[str, Any]]) -> 
         for item in recent_chats[:100]:
             sample_checked += 1
             key = item["context_key"]
-            for raw in redis_client.lrange(key, 0, 20):
-                parsed = safe_json(raw)
+            for parsed in _context_entries(redis_client, key, limit=20):
                 role_counts[str(parsed.get("role", "unknown"))] += 1
 
         top_threads = pd.DataFrame(recent_chats[:20]) if recent_chats else pd.DataFrame()
@@ -490,6 +592,18 @@ def render_capability_section(runtime_capabilities: dict[str, Any], capability_h
             for name, data in mcp_servers.items()
         ]
         st.dataframe(pd.DataFrame(details_rows), use_container_width=True, hide_index=True)
+
+        degraded_rows = [row for row in details_rows if row["status"] not in {"running", "disabled"}]
+        if degraded_rows:
+            with st.expander("Recovery Hints", expanded=False):
+                for row in degraded_rows:
+                    if "timed out after 20s" in str(row["message"]):
+                        st.write(
+                            f"- `{row['server']}` timed out at 20s. Set `MCP_SERVER_START_TIMEOUT_SECONDS=60` "
+                            "and rebuild `her-bot`."
+                        )
+                    else:
+                        st.write(f"- `{row['server']}`: {row['message']}")
     else:
         st.warning("No runtime capability snapshot published yet.")
 
@@ -513,7 +627,7 @@ def render_capability_section(runtime_capabilities: dict[str, Any], capability_h
         if not hist_df.empty:
             hist_df = hist_df.sort_values("timestamp")
             st.markdown("**Capability History (startup snapshots)**")
-            st.line_chart(hist_df.set_index("timestamp")[["tool_count", "mcp_running"]])
+            render_plotly_line(hist_df, "timestamp", ["tool_count", "mcp_running"], "Tool & MCP Running Trend")
 
     mcp_summary = summarize_mcp_from_logs(log_df)
     if mcp_summary["total_errors"] > 0:
@@ -522,10 +636,13 @@ def render_capability_section(runtime_capabilities: dict[str, Any], capability_h
         with dcol1:
             st.metric("MCP Errors/Warnings (logs)", mcp_summary["total_errors"])
             if mcp_summary["by_server"]:
-                st.bar_chart(pd.Series(mcp_summary["by_server"], name="count"))
+                server_df = pd.DataFrame(
+                    [{"server": k, "count": v} for k, v in mcp_summary["by_server"].items()]
+                ).sort_values("count", ascending=False)
+                render_plotly_bar(server_df, "server", "count", "MCP Errors by Server")
         with dcol2:
             if not mcp_summary["timeline"].empty:
-                st.line_chart(mcp_summary["timeline"].set_index("hour")["errors"])
+                render_plotly_line(mcp_summary["timeline"], "hour", "errors", "MCP Errors Over Time")
             if mcp_summary["top_messages"]:
                 st.dataframe(
                     pd.DataFrame(
@@ -599,7 +716,7 @@ if page == "Overview":
             trend = events_df.copy()
             trend["hour"] = trend["timestamp"].dt.floor("h")
             agg = trend.groupby("hour", as_index=False).agg(messages=("user_id", "count"), tokens=("token_estimate", "sum"))
-            st.line_chart(agg.set_index("hour")[["messages", "tokens"]])
+            render_plotly_line(agg, "hour", ["messages", "tokens"], "Messages & Tokens by Hour")
         else:
             st.info("No interaction events yet.")
 
@@ -607,7 +724,8 @@ if page == "Overview":
         st.subheader("Log Levels")
         if not logs_df.empty:
             level_counts = logs_df["level"].value_counts()
-            st.bar_chart(level_counts)
+            level_df = level_counts.rename_axis("level").reset_index(name="count")
+            render_plotly_bar(level_df, "level", "count", "Log Levels")
         else:
             st.info("No logs available yet.")
 
@@ -622,7 +740,10 @@ if page == "Overview":
             f"Group threads: {short_memory.get('threads_group', 0)}"
         )
         if short_memory.get("role_counts"):
-            st.bar_chart(pd.Series(short_memory["role_counts"], name="entries"))
+            role_df = pd.DataFrame(
+                [{"role": k, "entries": v} for k, v in short_memory["role_counts"].items()]
+            ).sort_values("entries", ascending=False)
+            render_plotly_bar(role_df, "role", "entries", "Context Roles")
 
     with mcol2:
         st.subheader("Long Memory (PostgreSQL)")
@@ -631,7 +752,10 @@ if page == "Overview":
         avg_importance = memory_stats.get("avg_importance")
         st.metric("Avg Importance", f"{avg_importance:.2f}" if isinstance(avg_importance, float) else "N/A")
         if memory_stats.get("category_counts"):
-            st.bar_chart(pd.Series(memory_stats["category_counts"], name="count"))
+            category_df = pd.DataFrame(
+                [{"category": k, "count": v} for k, v in memory_stats["category_counts"].items()]
+            ).sort_values("count", ascending=False)
+            render_plotly_bar(category_df, "category", "count", "Memory Categories")
 
 elif page == "Logs":
     st.title("System Logs")
@@ -657,7 +781,10 @@ elif page == "Logs":
         st.subheader("MCP Failure Report")
         st.metric("MCP Errors/Warnings", mcp_summary["total_errors"])
         if mcp_summary["by_server"]:
-            st.bar_chart(pd.Series(mcp_summary["by_server"], name="count"))
+            server_df = pd.DataFrame(
+                [{"server": k, "count": v} for k, v in mcp_summary["by_server"].items()]
+            ).sort_values("count", ascending=False)
+            render_plotly_bar(server_df, "server", "count", "MCP Failures by Server")
         if mcp_summary["top_messages"]:
             st.dataframe(
                 pd.DataFrame([{"message": k, "count": v} for k, v in mcp_summary["top_messages"].items()]),
@@ -703,7 +830,7 @@ elif page == "Executors":
         trend = latest.copy()
         trend["hour"] = trend["timestamp"].dt.floor("h")
         agg = trend.groupby("hour", as_index=False).agg(total=("command", "count"), failures=("success", lambda s: int((~s).sum())))
-        st.line_chart(agg.set_index("hour")[["total", "failures"]])
+        render_plotly_line(agg, "hour", ["total", "failures"], "Sandbox Execution Trend")
 
         st.markdown("---")
         st.subheader("Recent Execution Details")
@@ -723,7 +850,14 @@ elif page == "Jobs":
         jobs_df = jobs_df.sort_values("timestamp", ascending=False)
         st.dataframe(jobs_df.head(100), use_container_width=True, hide_index=True)
         if "success" in jobs_df.columns:
-            st.bar_chart(jobs_df["success"].value_counts().rename(index={True: "success", False: "failed"}))
+            success_df = (
+                jobs_df["success"]
+                .value_counts()
+                .rename(index={True: "success", False: "failed"})
+                .rename_axis("status")
+                .reset_index(name="count")
+            )
+            render_plotly_bar(success_df, "status", "count", "Scheduled Job Outcomes")
 
 elif page == "Metrics":
     st.title("Detailed Metrics")
@@ -739,7 +873,7 @@ elif page == "Metrics":
         token_trend = events_df.copy()
         token_trend["hour"] = token_trend["timestamp"].dt.floor("h")
         token_agg = token_trend.groupby("hour", as_index=False)["token_estimate"].sum()
-        st.line_chart(token_agg.set_index("hour")["token_estimate"])
+        render_plotly_line(token_agg, "hour", "token_estimate", "Token Usage by Hour")
 
         st.markdown("---")
         st.subheader("Top Active Users")
@@ -760,7 +894,10 @@ elif page == "Memory":
             f"Role sample based on {short_memory.get('sample_threads_checked', 0)} recent threads."
         )
         if short_memory.get("role_counts"):
-            st.bar_chart(pd.Series(short_memory["role_counts"], name="count"))
+            role_df = pd.DataFrame(
+                [{"role": k, "count": v} for k, v in short_memory["role_counts"].items()]
+            ).sort_values("count", ascending=False)
+            render_plotly_bar(role_df, "role", "count", "Role Distribution")
 
         top_threads_df = short_memory.get("top_threads_df")
         if isinstance(top_threads_df, pd.DataFrame) and not top_threads_df.empty:
@@ -783,14 +920,17 @@ elif page == "Memory":
         categories = memory_stats.get("category_counts", {})
         if categories:
             st.markdown("**Categories**")
-            st.bar_chart(pd.Series(categories, name="count"))
+            category_df = pd.DataFrame(
+                [{"category": k, "count": v} for k, v in categories.items()]
+            ).sort_values("count", ascending=False)
+            render_plotly_bar(category_df, "category", "count", "Memory Categories")
 
     st.markdown("---")
     st.subheader("Long Memory Growth (Last 30 Days)")
     daily = memory_stats.get("daily_memories", {})
     if daily:
         daily_df = pd.DataFrame(list(daily.items()), columns=["date", "count"]).sort_values("date")
-        st.line_chart(daily_df.set_index("date")["count"])
+        render_plotly_line(daily_df, "date", "count", "Long-Memory Growth (30d)")
     else:
         st.info("No long-memory growth data available yet.")
 

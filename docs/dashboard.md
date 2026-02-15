@@ -44,6 +44,7 @@ Charts use Plotly for responsive, interactive visuals (zoom, pan, hover, legend 
 - **Decision Audit Trail**: View runtime decisions and actions from Redis key `her:decision:logs`
 - **Transparency Metrics**: Breakdown of decision event types (scheduler, capability probes, reply generation)
 - **Debugging Support**: Correlate decisions with logs and job outcomes
+- **Reinforcement Traceability**: Reinforcement scoring decisions appear as `reinforcement_event` entries
 
 ### 📈 Metrics Page
 - **Token Usage Over Time**: Visual chart of token consumption
@@ -107,6 +108,7 @@ TZ=UTC
 - `her:scheduler:jobs` - Scheduled job history (last 100)
 - `her:scheduler:state` - Scheduler runtime state and upcoming jobs
 - `her:decision:logs` - Runtime decision log feed (last 500)
+- `her:reinforcement:events` - Reinforcement score/event history (last 1000)
 - `her:runtime:capabilities` - Latest startup capability snapshot (internet/sandbox/MCP)
 - `her:runtime:capabilities:history` - Capability snapshot history (last 100)
 

@@ -168,6 +168,16 @@ Expected:
 - HER confirms recurring reminder setup naturally.
 - Task appears in dashboard Jobs page under Upcoming Jobs.
 
+Send:
+
+```text
+That was perfect, thank you.
+```
+
+Expected:
+- Reinforcement logs record approval (`her:reinforcement:events` and Decisions page).
+- A reinforcement lesson entry is persisted in long-term memory category `reinforcement_lesson`.
+
 Run (time-based reminder):
 
 ```text
@@ -241,6 +251,7 @@ Expected:
 - Core service health/metrics are visible.
 - Jobs page includes Upcoming Jobs (from `her:scheduler:state`).
 - Decisions page includes runtime decision events (`her:decision:logs`).
+- Decisions include `reinforcement_event` and weekly `weekly_self_optimization` entries over time.
 
 ---
 

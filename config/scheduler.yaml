@@ -14,6 +14,14 @@ tasks:
     interval: "hourly"
     enabled: true
 
+  # Weekly reinforcement analysis and gradual self-optimization
+  - name: "weekly_self_optimization"
+    type: "self_optimization"
+    interval: "weekly"
+    at: "18:00"
+    timezone: "UTC"
+    enabled: true
+
   # Reminder example (set notify_user_id or ADMIN_USER_ID env)
   # - name: "daily_hydration"
   #   type: "reminder"

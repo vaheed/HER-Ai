@@ -184,6 +184,9 @@ def test_scheduler_supports_runtime_updates_and_persistence() -> None:
     assert "max_retries" in source
     assert "retry_delay_seconds" in source
     assert "one_time" in source
+    assert 'task_type == "self_optimization"' in source
+    assert "weekly_self_optimization" in source
+    assert "summarize_recent_patterns" in source
 
 
 def test_mcp_profile_path_is_configurable_via_env() -> None:
@@ -209,6 +212,20 @@ def test_telegram_registers_schedule_admin_command() -> None:
     assert "def _maybe_schedule_from_message" in handlers_source
     assert "def _parse_schedule_request" in handlers_source
     assert "Got it. I'll remind you" in handlers_source
+    assert "ReinforcementEngine" in handlers_source
+    assert "Adaptive communication profile" in handlers_source
+    assert "reinforcement_lesson" in handlers_source
+
+
+def test_reinforcement_engine_persists_scores_and_profiles() -> None:
+    source = Path("her-core/utils/reinforcement.py").read_text()
+    schema = Path("her-core/memory/schemas.sql").read_text()
+    assert "class ReinforcementEngine" in source
+    assert "def evaluate(" in source
+    assert "her:reinforcement:events" in source
+    assert "her:reinforcement:profile" in source
+    assert "event_type=\"reinforcement_event\"" in source
+    assert "CREATE TABLE IF NOT EXISTS reinforcement_events" in schema
 
 
 def test_dashboard_handles_mem0_schema_and_recent_chats() -> None:

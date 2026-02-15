@@ -105,3 +105,16 @@ CREATE TABLE IF NOT EXISTS decision_logs (
     summary TEXT NOT NULL,
     details JSONB
 );
+
+CREATE TABLE IF NOT EXISTS reinforcement_events (
+    reinforcement_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    timestamp TIMESTAMPTZ DEFAULT NOW(),
+    user_id TEXT REFERENCES users(user_id),
+    score DOUBLE PRECISION NOT NULL,
+    label TEXT NOT NULL,
+    task_succeeded BOOLEAN NOT NULL DEFAULT TRUE,
+    concise BOOLEAN NOT NULL DEFAULT TRUE,
+    helpful BOOLEAN NOT NULL DEFAULT TRUE,
+    emotionally_aligned BOOLEAN NOT NULL DEFAULT TRUE,
+    reasoning JSONB
+);

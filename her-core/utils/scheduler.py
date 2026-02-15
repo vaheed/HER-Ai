@@ -22,8 +22,10 @@ from zoneinfo import ZoneInfo
 
 import yaml
 
+from agents.personality_agent import PersonalityAgent
 from utils.config_paths import resolve_config_file
 from utils.decision_log import DecisionLogger
+from utils.reinforcement import ReinforcementEngine
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +39,7 @@ class TaskScheduler:
         self._scheduler_task: asyncio.Task | None = None
         self._config_path: Path | None = None
         self._decision_logger = DecisionLogger()
+        self._reinforcement = ReinforcementEngine()
 
     async def start(self):
         """Start the scheduler."""
@@ -95,13 +98,23 @@ class TaskScheduler:
             self._ensure_baseline_tasks()
 
     def _ensure_baseline_tasks(self) -> None:
-        required = {
+        reflection_required = {
             "name": "memory_reflection",
             "type": "memory_reflection",
             "interval": "hourly",
             "enabled": True,
             "max_retries": 2,
             "retry_delay_seconds": 30,
+        }
+        self_opt_required = {
+            "name": "weekly_self_optimization",
+            "type": "self_optimization",
+            "interval": "weekly",
+            "enabled": True,
+            "at": "18:00",
+            "timezone": os.getenv("TZ", "UTC"),
+            "max_retries": 1,
+            "retry_delay_seconds": 60,
         }
         for task in self.tasks:
             if str(task.get("name", "")).strip() == "memory_reflection":
@@ -110,8 +123,22 @@ class TaskScheduler:
                     task["interval"] = "hourly"
                 task.setdefault("max_retries", 2)
                 task.setdefault("retry_delay_seconds", 30)
-                return
-        self.tasks.append(required)
+                break
+        else:
+            self.tasks.append(reflection_required)
+
+        for task in self.tasks:
+            if str(task.get("name", "")).strip() == "weekly_self_optimization":
+                task["enabled"] = True
+                if str(task.get("interval", "")).strip().lower() != "weekly":
+                    task["interval"] = "weekly"
+                task.setdefault("at", "18:00")
+                task.setdefault("timezone", os.getenv("TZ", "UTC"))
+                task.setdefault("max_retries", 1)
+                task.setdefault("retry_delay_seconds", 60)
+                break
+        else:
+            self.tasks.append(self_opt_required)
 
     def _normalize_task(self, task: Any) -> dict[str, Any] | None:
         if not isinstance(task, dict):
@@ -463,6 +490,9 @@ class TaskScheduler:
                     success = result.startswith("Reminder sent")
                     if not success:
                         error = result
+                elif task_type == "self_optimization":
+                    result = await self._execute_self_optimization_task(task)
+                    success = True
                 else:
                     error = f"Unknown task type: {task_type}"
                     logger.warning(error)
@@ -570,6 +600,78 @@ class TaskScheduler:
         if sent:
             return f"Reminder sent to {user_id}"
         return f"Reminder failed for {user_id}"
+
+    async def _execute_self_optimization_task(self, task: dict[str, Any]) -> str:
+        summary = self._reinforcement.summarize_recent_patterns(window=500)
+        avg_score = float(summary.get("avg_score", 0.0) or 0.0)
+        weak_areas = list(summary.get("weak_areas", []))
+        strong_areas = list(summary.get("strong_areas", []))
+
+        personality_notes: list[str] = []
+        try:
+            agents_path = resolve_config_file("agents.yaml")
+            personality_path = resolve_config_file("personality.yaml")
+            personality = PersonalityAgent(agents_path, personality_path)
+
+            if avg_score < -0.2:
+                personality.adjust_trait("system", "warmth", 1)
+                personality.adjust_trait("system", "assertiveness", -1)
+                personality_notes.append("Adjusted personality: warmth +1, assertiveness -1")
+            elif avg_score > 0.4:
+                personality.adjust_trait("system", "curiosity", 1)
+                personality_notes.append("Adjusted personality: curiosity +1")
+            else:
+                personality_notes.append("No personality adjustment needed this cycle")
+        except Exception as exc:  # noqa: BLE001
+            personality_notes.append(f"Personality adjustment skipped: {exc}")
+
+        if weak_areas:
+            learning_task_name = "self_learning_focus"
+            existing = {str(t.get("name", "")) for t in self.tasks}
+            message = (
+                "Self-learning focus for this week: "
+                + ", ".join(weak_areas[:3])
+                + ". Prioritize stronger clarity, empathy, and actionable guidance."
+            )
+            if learning_task_name in existing:
+                for scheduled in self.tasks:
+                    if str(scheduled.get("name", "")) == learning_task_name:
+                        scheduled["message"] = message
+                        scheduled["enabled"] = True
+                        break
+            else:
+                notify_user_id = self._resolve_notify_user_id(task)
+                if notify_user_id is None:
+                    admin_id = str(os.getenv("ADMIN_USER_ID", "")).strip()
+                    notify_user_id = int(admin_id) if admin_id.isdigit() else None
+                self.add_task(
+                    name=learning_task_name,
+                    interval="every_2_days",
+                    task_type="reminder",
+                    enabled=True,
+                    message=message,
+                    notify_user_id=notify_user_id,
+                    max_retries=1,
+                    retry_delay_seconds=60,
+                )
+            self.persist_tasks()
+
+        self._decision_logger.log(
+            event_type="weekly_self_optimization",
+            summary="Completed weekly self-optimization cycle",
+            source="scheduler",
+            details={
+                "interaction_count": int(summary.get("count", 0) or 0),
+                "avg_score": avg_score,
+                "weak_areas": weak_areas,
+                "strong_areas": strong_areas,
+                "personality_notes": personality_notes,
+            },
+        )
+        return (
+            "Weekly self-optimization complete. "
+            f"avg_score={avg_score}, weak_areas={weak_areas[:3]}, strong_areas={strong_areas[:3]}"
+        )
 
     async def _send_telegram_notification(self, chat_id: int, text: str) -> bool:
         """Send scheduler notifications via Telegram Bot API."""

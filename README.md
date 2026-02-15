@@ -67,6 +67,12 @@ docker compose logs -f her-bot
 - **Evolution Mechanisms**: Conversation-driven, reflection-driven, admin-tuned, time-based
 - **Safety Constraints**: Bounded traits, immutable empathy/safety values
 
+### 🔁 Reinforcement Learning Loop
+- **Per-Interaction Scoring**: Meaningful interactions are scored using observed feedback and task success
+- **Adaptive Tendencies**: Communication tendencies (conciseness, empathy, initiative, helpfulness) are updated gradually
+- **Persistent Lessons**: Reinforcement lessons are stored in long-term memory and SQL/Redis logs
+- **Weekly Optimization**: A scheduled self-optimization job analyzes patterns and applies small, stable improvements
+
 ### 🤖 Agent Architecture (CrewAI)
 - **Conversation Agent**: Primary interaction handler
 - **Reflection Agent**: Analyzes conversations, decides what to remember

@@ -20,6 +20,7 @@ from memory.mem0_client import HERMemory
 from utils.decision_log import DecisionLogger
 from utils.llm_factory import build_llm
 from utils.metrics import HERMetrics
+from utils.reinforcement import ReinforcementEngine
 from utils.scheduler import TaskScheduler
 
 logger = logging.getLogger(__name__)
@@ -67,6 +68,7 @@ class MessageHandlers:
         self._llm = build_llm()
         self._web_search_tool = CurlWebSearchTool()
         self._decision_logger = DecisionLogger()
+        self._reinforcement = ReinforcementEngine()
         self._metrics: HERMetrics | None = None
         try:
             self._metrics = HERMetrics(
@@ -780,6 +782,7 @@ class MessageHandlers:
 
     def _build_reply_prompt(
         self,
+        user_id: str,
         message: str,
         user_context: list[dict[str, Any]],
         group_context: list[dict[str, Any]],
@@ -795,16 +798,57 @@ class MessageHandlers:
         related_memory_text = "\n".join(
             f"- {m.get('memory') or m.get('text') or m.get('data') or m}" for m in memories[:5]
         ) or "(none)"
+        style_summary = self._reinforcement.style_guidance(user_id)
 
         return (
             "You are HER, a warm emotionally intelligent assistant in Telegram. "
             "Answer naturally and concisely.\n\n"
+            f"Adaptive communication profile: {style_summary}\n\n"
             f"Recent user context:\n{recent_user}\n\n"
             f"Recent group context:\n{recent_group}\n\n"
             f"Relevant long-term memories:\n{related_memory_text}\n\n"
             f"Real-time context:\n{live_context}\n\n"
             f"Current user message: {message}"
         )
+
+    def _last_assistant_message(self, context_rows: list[dict[str, Any]]) -> str:
+        for item in reversed(context_rows):
+            if str(item.get("role", "")).lower() == "assistant":
+                return str(item.get("message", ""))
+        return ""
+
+    def _record_reinforcement(
+        self,
+        user_id: str,
+        user_message: str,
+        assistant_message: str,
+        task_succeeded: bool,
+    ) -> None:
+        if not assistant_message.strip():
+            return
+        outcome = self._reinforcement.evaluate(
+            user_id=user_id,
+            user_message=user_message,
+            assistant_message=assistant_message,
+            task_succeeded=task_succeeded,
+        )
+        lesson = (
+            "Reinforcement lesson: "
+            f"score={outcome.score}, label={outcome.label}, reasoning={','.join(outcome.reasoning[:6])}"
+        )
+        try:
+            self.memory.add_memory(user_id, lesson, "reinforcement_lesson", 0.7)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Failed to persist reinforcement lesson memory: %s", exc)
+
+    @staticmethod
+    def _maybe_recurring_suggestion(message: str) -> str | None:
+        lower = message.lower()
+        if any(token in lower for token in {"i forgot again", "keep forgetting", "again forgot", "hard to remember"}):
+            return "If you want, I can set this as a recurring reminder automatically."
+        if any(token in lower for token in {"goal", "habit", "routine"}) and "every" not in lower:
+            return "I can also turn this into a recurring check-in so we track progress over time."
+        return None
 
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not update.message or not update.effective_user:
@@ -815,6 +859,8 @@ class MessageHandlers:
         message = (update.message.text or "").strip()
         if not message:
             return
+        previous_context = self.memory.get_context(str(user_id))
+        previous_assistant_message = self._last_assistant_message(previous_context)
 
         is_group = self._is_group_chat(update)
         group_key = self._group_memory_key(chat_id)
@@ -856,6 +902,7 @@ class MessageHandlers:
                 self.memory.update_context(group_key, f"HER: {auto_schedule_reply}", "assistant", max_messages=120)
             if self._metrics:
                 self._metrics.record_interaction(str(user_id), message, auto_schedule_reply)
+            self._record_reinforcement(str(user_id), message, auto_schedule_reply, task_succeeded=True)
             await self._reply(update, auto_schedule_reply)
             return
 
@@ -871,6 +918,7 @@ class MessageHandlers:
                 self.memory.update_context(group_key, f"HER: {realtime_response}", "assistant", max_messages=120)
             if self._metrics:
                 self._metrics.record_interaction(str(user_id), message, realtime_response)
+            self._record_reinforcement(str(user_id), message, realtime_response, task_succeeded=True)
             await self._reply(update, realtime_response)
             return
 
@@ -881,7 +929,7 @@ class MessageHandlers:
         user_context = self.memory.get_context(str(user_id))
         group_context = self.memory.get_context(group_key) if is_group else []
         live_context = self._build_live_context(message)
-        prompt = self._build_reply_prompt(message, user_context, group_context, memories, live_context)
+        prompt = self._build_reply_prompt(str(user_id), message, user_context, group_context, memories, live_context)
 
         try:
             response_obj = self._llm.invoke(
@@ -911,12 +959,25 @@ class MessageHandlers:
         )
         if internet_available and _INTERNET_DENIAL_PATTERN.search(response):
             response += "\n\nNote: runtime checks show internet is currently available."
+        proactive_hint = self._maybe_recurring_suggestion(message)
+        if proactive_hint and proactive_hint.lower() not in response.lower():
+            response = f"{response}\n\n{proactive_hint}"
 
         self.memory.update_context(str(user_id), response, "assistant")
         if is_group:
             self.memory.update_context(group_key, f"HER: {response}", "assistant", max_messages=120)
         if self._metrics:
             self._metrics.record_interaction(str(user_id), message, response)
+        task_succeeded = "temporary issue" not in response.lower()
+        self._record_reinforcement(str(user_id), message, response, task_succeeded=task_succeeded)
+        if previous_assistant_message:
+            # Evaluate user reaction to previous assistant message as evidence-based feedback.
+            self._record_reinforcement(
+                str(user_id),
+                user_message=message,
+                assistant_message=previous_assistant_message,
+                task_succeeded=True,
+            )
         self._decision_logger.log(
             event_type="assistant_response",
             summary="Generated assistant response",

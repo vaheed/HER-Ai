@@ -88,13 +88,15 @@ class TaskScheduler:
                 if normalized is None:
                     continue
                 valid_tasks.append(normalized)
+            if not valid_tasks:
+                valid_tasks = self._load_tasks_override_from_redis()
             self.tasks = valid_tasks
             self._ensure_baseline_tasks()
             logger.info("Loaded %s scheduled tasks", len(self.tasks))
 
         except Exception as exc:  # noqa: BLE001
             logger.error("Failed to load scheduler config: %s", exc)
-            self.tasks = []
+            self.tasks = self._load_tasks_override_from_redis()
             self._ensure_baseline_tasks()
 
     def _ensure_baseline_tasks(self) -> None:
@@ -272,13 +274,56 @@ class TaskScheduler:
             return True, f"saved to {path}"
         except Exception as exc:  # noqa: BLE001
             logger.error("Failed to persist scheduler tasks to %s: %s", path, exc)
+            ok, detail = self._persist_tasks_override_to_redis()
+            if ok:
+                logger.warning(
+                    "Scheduler config write failed at %s; persisted task set to Redis fallback. reason=%s",
+                    path,
+                    exc,
+                )
+                return True, f"saved to Redis fallback ({detail}); config write failed: {exc}"
             if "Permission denied" in str(exc):
                 logger.warning(
                     "Scheduler config path is not writable (%s). "
                     "Set HER_CONFIG_DIR to writable path or use writable /app/config mount.",
                     path,
                 )
-            return False, f"failed to write {path}: {exc}"
+            return False, f"failed to write {path} and Redis fallback: {exc}"
+
+    def _load_tasks_override_from_redis(self) -> list[dict[str, Any]]:
+        client = self._redis_client()
+        if client is None:
+            return []
+        try:
+            raw = client.get("her:scheduler:tasks_override")
+            if not raw:
+                return []
+            payload = json.loads(raw)
+            raw_tasks = payload.get("tasks", []) if isinstance(payload, dict) else []
+            loaded: list[dict[str, Any]] = []
+            for raw_task in raw_tasks:
+                normalized = self._normalize_task(raw_task)
+                if normalized is not None:
+                    loaded.append(normalized)
+            if loaded:
+                logger.info("Loaded %s scheduler tasks from Redis override", len(loaded))
+            return loaded
+        except Exception:  # noqa: BLE001
+            return []
+
+    def _persist_tasks_override_to_redis(self) -> tuple[bool, str]:
+        client = self._redis_client()
+        if client is None:
+            return False, "redis unavailable"
+        try:
+            payload = {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "tasks": self._serializable_tasks(),
+            }
+            client.set("her:scheduler:tasks_override", json.dumps(payload))
+            return True, "her:scheduler:tasks_override"
+        except Exception as exc:  # noqa: BLE001
+            return False, str(exc)
 
     async def _scheduler_loop(self):
         """Main scheduler loop."""

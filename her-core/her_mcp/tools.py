@@ -204,7 +204,8 @@ class MCPToolsIntegration:
                 try:
                     sock_gid = docker_sock.stat().st_gid
                     process_groups = os.getgroups()
-                    if sock_gid not in process_groups:
+                    running_as_root = os.geteuid() == 0
+                    if (not running_as_root) and (sock_gid not in process_groups):
                         logger.warning(
                             "docker.sock group mismatch: socket gid=%s, process groups=%s, DOCKER_GID=%s",
                             sock_gid,

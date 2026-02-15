@@ -293,12 +293,14 @@ def _log_runtime_config_selection() -> None:
             sock_gid = sock_stat.st_gid
             mode = stat.S_IMODE(sock_stat.st_mode)
             process_groups = os.getgroups()
-            in_group = sock_gid in process_groups
+            running_as_root = os.geteuid() == 0
+            in_group = running_as_root or (sock_gid in process_groups)
             logger.info(
-                "Docker socket check: gid=%s mode=%s process_groups=%s access=%s",
+                "Docker socket check: gid=%s mode=%s process_groups=%s euid=%s access=%s",
                 sock_gid,
                 oct(mode),
                 process_groups,
+                os.geteuid(),
                 in_group,
             )
             if not in_group:

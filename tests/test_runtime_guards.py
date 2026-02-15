@@ -187,6 +187,8 @@ def test_scheduler_supports_runtime_updates_and_persistence() -> None:
     assert 'task_type == "self_optimization"' in source
     assert "weekly_self_optimization" in source
     assert "summarize_recent_patterns" in source
+    assert "her:scheduler:tasks_override" in source
+    assert "Loaded %s scheduler tasks from Redis override" in source
 
 
 def test_mcp_profile_path_is_configurable_via_env() -> None:
@@ -215,6 +217,7 @@ def test_telegram_registers_schedule_admin_command() -> None:
     assert "ReinforcementEngine" in handlers_source
     assert "Adaptive communication profile" in handlers_source
     assert "reinforcement_lesson" in handlers_source
+    assert "if isinstance(text_value, list)" in handlers_source
 
 
 def test_reinforcement_engine_persists_scores_and_profiles() -> None:

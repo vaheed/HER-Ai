@@ -456,7 +456,32 @@ class MessageHandlers:
         if not self.reflection_agent:
             return []
         try:
-            return self.reflection_agent.analyze_conversation([{"role": "user", "message": text}])
+            raw = self.reflection_agent.analyze_conversation([{"role": "user", "message": text}])
+            if not isinstance(raw, list):
+                return []
+            normalized: list[dict[str, Any]] = []
+            for item in raw:
+                if not isinstance(item, dict):
+                    continue
+                text_value = item.get("text", "")
+                if isinstance(text_value, list):
+                    text_value = " ".join(str(v) for v in text_value if v is not None)
+                text_value = str(text_value).strip()
+                if not text_value:
+                    continue
+                category = str(item.get("category", "general")).strip() or "general"
+                try:
+                    importance = float(item.get("importance", 0.6))
+                except (TypeError, ValueError):
+                    importance = 0.6
+                normalized.append(
+                    {
+                        "text": text_value,
+                        "category": category,
+                        "importance": max(0.0, min(1.0, importance)),
+                    }
+                )
+            return normalized
         except Exception as exc:  # noqa: BLE001
             logger.debug("Reflection extraction skipped: %s", exc)
             return []

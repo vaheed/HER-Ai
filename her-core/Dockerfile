@@ -13,6 +13,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
+# Pre-install MCP Node servers used by config/mcp_servers*.yaml so runtime startup
+# avoids first-run npx downloads and is less likely to hit MCP startup timeouts.
+RUN npm install -g \
+      @modelcontextprotocol/server-filesystem \
+      @modelcontextprotocol/server-postgres \
+      mcp-fetch-server \
+      @modelcontextprotocol/server-memory \
+      @modelcontextprotocol/server-sequential-thinking \
+      @modelcontextprotocol/server-pdf
+
 COPY her-core/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 

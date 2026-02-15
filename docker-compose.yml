@@ -49,6 +49,8 @@ services:
     - ./logs:/app/logs
     - /var/run/docker.sock:/var/run/docker.sock
     - workspace:/workspace
+    group_add:
+    - ${DOCKER_GID:-998}
   postgres:
     image: pgvector/pgvector:pg17
     container_name: her-postgres

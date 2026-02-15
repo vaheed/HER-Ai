@@ -29,7 +29,7 @@ class MCPManager:
         self._stacks: dict[str, contextlib.AsyncExitStack] = {}
         self.startup_timeout_seconds = max(
             5,
-            int(os.getenv("MCP_SERVER_START_TIMEOUT_SECONDS", "20")),
+            int(os.getenv("MCP_SERVER_START_TIMEOUT_SECONDS", "60")),
         )
 
     @staticmethod

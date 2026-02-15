@@ -180,8 +180,9 @@ REDIS_PASSWORD=redis_secure_password
 
 # MCP / Sandbox
 MCP_CONFIG_PATH=mcp_servers.yaml
-MCP_SERVER_START_TIMEOUT_SECONDS=20
+MCP_SERVER_START_TIMEOUT_SECONDS=60
 SANDBOX_CONTAINER_NAME=her-sandbox
+DOCKER_GID=998
 TZ=UTC
 ```
 
@@ -232,6 +233,12 @@ Common issues and solutions:
 ### Docker Compose Build Errors
 - Ensure you're using the latest `docker-compose.yml` from the repository
 - Check that all required directories exist
+
+### Sandbox Capability Degraded (`Permission denied` on Docker socket)
+- Ensure `DOCKER_GID` matches your host Docker socket group id:
+  - `stat -c '%g' /var/run/docker.sock`
+- Set that value in `.env` as `DOCKER_GID=<gid>` and restart:
+  - `docker compose up -d --build`
 
 ### Memory/LLM Provider Issues
 - Verify your LLM provider credentials are correct

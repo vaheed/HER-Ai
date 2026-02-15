@@ -55,7 +55,7 @@ Default MCP profile in this repo: `config/mcp_servers.yaml`
 Required environment variables for this profile are documented in `.env.example`:
 `POSTGRES_URL` (`BRAVE_API_KEY` only if enabling `brave-search`).
 You can switch profiles with `MCP_CONFIG_PATH` (for example: `mcp_servers.local.yaml`).
-Per-server startup timeout is controlled by `MCP_SERVER_START_TIMEOUT_SECONDS` (default `20`); timed-out/failed servers are marked unavailable and startup continues.
+Per-server startup timeout is controlled by `MCP_SERVER_START_TIMEOUT_SECONDS` (default `60`); timed-out/failed servers are marked unavailable and startup continues.
 Global timezone is set with `TZ` (default `UTC`) and passed to all runtime containers in `docker-compose.yml`.
 
 ## ✅ Ready-to-use local MCP profile

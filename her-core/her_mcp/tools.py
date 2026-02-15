@@ -236,11 +236,17 @@ class MCPToolsIntegration:
                     self.sandbox_container,
                 )
             except Exception as exc:  # noqa: BLE001
+                message = str(exc)
+                if "Permission denied" in message and "/var/run/docker.sock" in message:
+                    message = (
+                        f"{message}. Set DOCKER_GID to host docker.sock group id "
+                        "(e.g., stat -c '%g' /var/run/docker.sock) and restart compose."
+                    )
                 self.capability_status["sandbox"] = {
                     "available": False,
-                    "reason": f"docker sandbox lookup failed: {exc}",
+                    "reason": f"docker sandbox lookup failed: {message}",
                 }
-                logger.warning("Sandbox container '%s' not available: %s", self.sandbox_container, exc)
+                logger.warning("Sandbox container '%s' not available: %s", self.sandbox_container, message)
         except ImportError:
             self.capability_status["sandbox"] = {
                 "available": False,

@@ -18,6 +18,7 @@ from her_telegram.rate_limiter import RateLimiter
 from memory.mem0_client import HERMemory
 from utils.llm_factory import build_llm
 from utils.metrics import HERMetrics
+from utils.scheduler import TaskScheduler
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +34,7 @@ class MessageHandlers:
         admin_user_ids: list[int],
         rate_limiter: RateLimiter,
         mcp_manager: Any | None = None,
+        scheduler: TaskScheduler | None = None,
         reflection_agent: Any | None = None,
         welcome_message: str = "Hi! I'm HER, your AI companion. How can I help you today?",
         group_reply_on_mention_only: bool = True,
@@ -44,6 +46,7 @@ class MessageHandlers:
         self.admin_user_ids = admin_user_ids
         self.rate_limiter = rate_limiter
         self.mcp_manager = mcp_manager
+        self.scheduler = scheduler
         self.reflection_agent = reflection_agent
         self.welcome_message = welcome_message
         self.group_reply_on_mention_only = group_reply_on_mention_only
@@ -86,7 +89,7 @@ class MessageHandlers:
         if self.is_admin(user_id):
             await self._reply(
                 update,
-                "Admin commands: /status /personality /memories /reflect /reset /mcp /help",
+                "Admin commands: /status /personality /memories /reflect /reset /mcp /schedule /help",
                 reply_markup=get_admin_menu(),
             )
             return
@@ -137,6 +140,108 @@ class MessageHandlers:
             return
         status = self.mcp_manager.get_server_status() if self.mcp_manager else {"mcp": "not configured"}
         await self._reply(update, f"🔧 MCP status:\n{status}")
+
+    async def schedule_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not self.is_admin(update.effective_user.id):
+            await self._reply(update, "❌ Admin only command")
+            return
+        if not self.scheduler:
+            await self._reply(update, "❌ Scheduler not initialized")
+            return
+
+        args = [str(arg).strip() for arg in (context.args or []) if str(arg).strip()]
+        action = args[0].lower() if args else "list"
+
+        if action in {"list", "show"}:
+            tasks = self.scheduler.get_tasks()
+            if not tasks:
+                await self._reply(update, "⏰ No scheduled tasks configured.")
+                return
+            lines = ["⏰ Scheduled tasks:"]
+            for task in tasks:
+                name = task.get("name", "unknown")
+                task_type = task.get("type", "custom")
+                interval = task.get("interval", "unknown")
+                enabled = "on" if task.get("enabled", True) else "off"
+                lines.append(f"- {name} | type={task_type} | interval={interval} | enabled={enabled}")
+            lines.append("")
+            lines.append("Use: /schedule set <task> <interval>")
+            lines.append("Use: /schedule enable <task> | /schedule disable <task>")
+            lines.append("Use: /schedule run <task>")
+            lines.append("Use: /schedule add <name> <type> <interval>")
+            await self._reply(update, "\n".join(lines))
+            return
+
+        if action == "set":
+            if len(args) < 3:
+                await self._reply(update, "Usage: /schedule set <task_name> <interval>")
+                return
+            task_name = args[1]
+            interval = args[2].lower()
+            try:
+                updated = self.scheduler.set_task_interval(task_name, interval)
+            except ValueError as exc:
+                await self._reply(update, f"❌ {exc}")
+                return
+            if not updated:
+                await self._reply(update, f"❌ Task '{task_name}' not found")
+                return
+            ok, details = self.scheduler.persist_tasks()
+            status = "saved" if ok else "not saved"
+            await self._reply(update, f"✅ Updated '{task_name}' interval to '{interval}' ({status}: {details})")
+            return
+
+        if action in {"enable", "disable"}:
+            if len(args) < 2:
+                await self._reply(update, f"Usage: /schedule {action} <task_name>")
+                return
+            task_name = args[1]
+            enabled = action == "enable"
+            updated = self.scheduler.set_task_enabled(task_name, enabled)
+            if not updated:
+                await self._reply(update, f"❌ Task '{task_name}' not found")
+                return
+            ok, details = self.scheduler.persist_tasks()
+            state = "enabled" if enabled else "disabled"
+            status = "saved" if ok else "not saved"
+            await self._reply(update, f"✅ Task '{task_name}' {state} ({status}: {details})")
+            return
+
+        if action == "run":
+            if len(args) < 2:
+                await self._reply(update, "Usage: /schedule run <task_name>")
+                return
+            task_name = args[1]
+            ok, details = await self.scheduler.run_task_now(task_name)
+            if not ok:
+                await self._reply(update, f"❌ {details}: '{task_name}'")
+                return
+            await self._reply(update, f"✅ Task '{task_name}' executed now")
+            return
+
+        if action == "add":
+            if len(args) < 4:
+                await self._reply(update, "Usage: /schedule add <name> <type> <interval>")
+                return
+            name, task_type, interval = args[1], args[2], args[3].lower()
+            existing_names = {str(t.get('name')) for t in self.scheduler.get_tasks()}
+            if name in existing_names:
+                await self._reply(update, f"❌ Task '{name}' already exists")
+                return
+            try:
+                self.scheduler.add_task(name=name, task_type=task_type, interval=interval, enabled=True)
+            except ValueError as exc:
+                await self._reply(update, f"❌ {exc}")
+                return
+            ok, details = self.scheduler.persist_tasks()
+            status = "saved" if ok else "not saved"
+            await self._reply(update, f"✅ Added task '{name}' ({status}: {details})")
+            return
+
+        await self._reply(
+            update,
+            "Unknown schedule action. Use: list|set|enable|disable|run|add",
+        )
 
     def _fetch_online_utc_now(self) -> datetime | None:
         try:

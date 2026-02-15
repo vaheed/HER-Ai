@@ -114,6 +114,26 @@ Expected:
 Expected:
 - Reset acknowledgement is returned.
 
+### 4.6 `/schedule`
+
+Run:
+
+```text
+/schedule list
+```
+
+Expected:
+- Scheduled tasks list is returned with interval and enabled state.
+
+Run:
+
+```text
+/schedule run memory_reflection
+```
+
+Expected:
+- Immediate execution acknowledgement is returned.
+
 ---
 
 ## 5) Validate public-mode throttling
@@ -204,6 +224,7 @@ Expected:
 - [ ] Admin commands return responses.
 - [ ] Public throttling triggers when expected.
 - [ ] `/mcp` reports server statuses.
+- [ ] `/schedule list` returns configured tasks.
 - [ ] Dashboard reachable at `:8501`.
 - [ ] No crash loops in `docker compose logs her-bot`.
 

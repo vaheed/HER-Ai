@@ -172,6 +172,7 @@ async def async_main(config: AppConfig) -> None:
         admin_user_ids.append(int(env_admin))
 
     features = telegram_config.get("bot", {}).get("features", {})
+    scheduler = get_scheduler()
 
     bot = HERBot(
         token=os.getenv("TELEGRAM_BOT_TOKEN", ""),
@@ -182,6 +183,7 @@ async def async_main(config: AppConfig) -> None:
         admin_user_ids=admin_user_ids,
         rate_limiter=rate_limiter,
         mcp_manager=mcp_manager,
+        scheduler=scheduler,
         welcome_message=features.get(
             "welcome_message", "Hi! I'm HER, your AI companion. How can I help you today?"
         ),
@@ -190,7 +192,6 @@ async def async_main(config: AppConfig) -> None:
     )
 
     # Start task scheduler
-    scheduler = get_scheduler()
     await scheduler.start()
     logger.info("✓ Task scheduler started")
 

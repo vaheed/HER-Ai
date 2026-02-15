@@ -163,6 +163,15 @@ def test_scheduler_uses_time_module_for_execution_timing() -> None:
     assert "time.time()" in source
 
 
+def test_scheduler_supports_runtime_updates_and_persistence() -> None:
+    source = Path("her-core/utils/scheduler.py").read_text()
+    assert "def persist_tasks" in source
+    assert "def set_task_interval" in source
+    assert "def set_task_enabled" in source
+    assert "def run_task_now" in source
+    assert "def is_valid_interval" in source
+
+
 def test_mcp_profile_path_is_configurable_via_env() -> None:
     main_source = Path("her-core/main.py").read_text()
     env_example = Path(".env.example").read_text()
@@ -170,6 +179,16 @@ def test_mcp_profile_path_is_configurable_via_env() -> None:
     assert 'os.getenv("MCP_CONFIG_PATH", "mcp_servers.yaml")' in main_source
     assert "MCP_CONFIG_PATH=mcp_servers.yaml" in env_example
     assert "SANDBOX_CONTAINER_NAME=her-sandbox" in env_example
+
+
+def test_telegram_registers_schedule_admin_command() -> None:
+    bot_source = Path("her-core/her_telegram/bot.py").read_text()
+    handlers_source = Path("her-core/her_telegram/handlers.py").read_text()
+    telegram_config = Path("config/telegram.yaml").read_text()
+
+    assert 'CommandHandler("schedule", self.handlers.schedule_command)' in bot_source
+    assert "/schedule" in handlers_source
+    assert "/schedule - Manage scheduled tasks" in telegram_config
 
 
 def test_dashboard_handles_mem0_schema_and_recent_chats() -> None:

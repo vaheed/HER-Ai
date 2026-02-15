@@ -14,7 +14,8 @@ import logging
 import os
 import time
 from datetime import datetime, timedelta
-from typing import Any, Callable
+from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -30,6 +31,7 @@ class TaskScheduler:
         self.tasks: list[dict[str, Any]] = []
         self.running = False
         self._scheduler_task: asyncio.Task | None = None
+        self._config_path: Path | None = None
 
     async def start(self):
         """Start the scheduler."""
@@ -57,6 +59,7 @@ class TaskScheduler:
         """Load tasks from configuration."""
         try:
             config_path = resolve_config_file("scheduler.yaml")
+            self._config_path = config_path
             if not config_path.exists():
                 logger.debug("No scheduler.yaml found, using defaults")
                 self.tasks = []
@@ -65,12 +68,46 @@ class TaskScheduler:
             with config_path.open("r", encoding="utf-8") as f:
                 config = yaml.safe_load(f) or {}
 
-            self.tasks = config.get("tasks", [])
+            raw_tasks = config.get("tasks", [])
+            self.tasks = [task for task in raw_tasks if isinstance(task, dict)]
             logger.info("Loaded %s scheduled tasks", len(self.tasks))
 
         except Exception as exc:  # noqa: BLE001
             logger.error("Failed to load scheduler config: %s", exc)
             self.tasks = []
+
+    @staticmethod
+    def is_valid_interval(interval: str) -> bool:
+        """Validate supported interval formats."""
+        if interval in {"hourly", "daily", "weekly"}:
+            return True
+        if interval.startswith("every_"):
+            parts = interval.split("_")
+            if len(parts) != 3 or not parts[1].isdigit():
+                return False
+            return parts[2] in {"minutes", "hours", "days"}
+        return False
+
+    def _serializable_tasks(self) -> list[dict[str, Any]]:
+        """Return task list safe for config persistence."""
+        serializable: list[dict[str, Any]] = []
+        for task in self.tasks:
+            serializable.append({k: v for k, v in task.items() if not str(k).startswith("_")})
+        return serializable
+
+    def persist_tasks(self) -> tuple[bool, str]:
+        """Persist scheduler tasks back to scheduler.yaml."""
+        path = self._config_path or resolve_config_file("scheduler.yaml")
+        try:
+            payload = {"tasks": self._serializable_tasks()}
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("w", encoding="utf-8") as handle:
+                yaml.safe_dump(payload, handle, sort_keys=False)
+            self._config_path = path
+            return True, f"saved to {path}"
+        except Exception as exc:  # noqa: BLE001
+            logger.error("Failed to persist scheduler tasks to %s: %s", path, exc)
+            return False, f"failed to write {path}: {exc}"
 
     async def _scheduler_loop(self):
         """Main scheduler loop."""
@@ -256,6 +293,10 @@ class TaskScheduler:
         **kwargs: Any,
     ):
         """Add a task to the scheduler."""
+        if not self.is_valid_interval(interval):
+            raise ValueError(
+                "Invalid interval. Use hourly|daily|weekly|every_<N>_minutes|every_<N>_hours|every_<N>_days"
+            )
         task = {
             "name": name,
             "interval": interval,
@@ -265,6 +306,38 @@ class TaskScheduler:
         }
         self.tasks.append(task)
         logger.info("Added scheduled task: %s (interval: %s)", name, interval)
+
+    def set_task_interval(self, name: str, interval: str) -> bool:
+        """Update interval for an existing task."""
+        if not self.is_valid_interval(interval):
+            raise ValueError(
+                "Invalid interval. Use hourly|daily|weekly|every_<N>_minutes|every_<N>_hours|every_<N>_days"
+            )
+        for task in self.tasks:
+            if task.get("name") == name:
+                task["interval"] = interval
+                task.pop("_last_run", None)
+                return True
+        return False
+
+    def set_task_enabled(self, name: str, enabled: bool) -> bool:
+        """Enable/disable an existing task."""
+        for task in self.tasks:
+            if task.get("name") == name:
+                task["enabled"] = enabled
+                if enabled:
+                    task.pop("_last_run", None)
+                return True
+        return False
+
+    async def run_task_now(self, name: str) -> tuple[bool, str]:
+        """Execute a configured task immediately by name."""
+        for task in self.tasks:
+            if task.get("name") == name:
+                await self._execute_task(task)
+                task["_last_run"] = datetime.now().isoformat()
+                return True, "executed"
+        return False, "task not found"
 
     def get_tasks(self) -> list[dict[str, Any]]:
         """Get all scheduled tasks."""

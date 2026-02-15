@@ -11,6 +11,7 @@ bot:
       - /reflect - Trigger manual reflection
       - /reset - Clear conversation context
       - /mcp - View MCP server status
+      - /schedule - Manage scheduled tasks
       - /help - Show all commands
 
     public:

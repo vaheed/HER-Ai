@@ -20,6 +20,7 @@ class HERBot:
         admin_user_ids: list,
         rate_limiter,
         mcp_manager=None,
+        scheduler=None,
         welcome_message: str = "Hi! I'm HER, your AI companion. How can I help you today?",
         group_reply_on_mention_only: bool = True,
         group_summary_every_messages: int = 25,
@@ -32,6 +33,7 @@ class HERBot:
             admin_user_ids=admin_user_ids,
             rate_limiter=rate_limiter,
             mcp_manager=mcp_manager,
+            scheduler=scheduler,
             reflection_agent=reflection_agent,
             welcome_message=welcome_message,
             group_reply_on_mention_only=group_reply_on_mention_only,
@@ -59,6 +61,7 @@ class HERBot:
         self.app.add_handler(CommandHandler("reflect", self.handlers.reflect_command))
         self.app.add_handler(CommandHandler("reset", self.handlers.reset_command))
         self.app.add_handler(CommandHandler("mcp", self.handlers.mcp_command))
+        self.app.add_handler(CommandHandler("schedule", self.handlers.schedule_command))
         self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handlers.handle_message))
         self.app.add_handler(CallbackQueryHandler(self.handlers.handle_callback))
 

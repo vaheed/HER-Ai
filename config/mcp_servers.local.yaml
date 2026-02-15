@@ -42,5 +42,6 @@ servers:
     args:
       - -y
       - "@modelcontextprotocol/server-pdf"
+      - --stdio
     env: {}
     description: "Parse and extract text from local PDF documents"

@@ -27,14 +27,30 @@ class MCPManager:
         self.tools_cache: dict[str, list[dict[str, Any]]] = {}
         self.server_status: dict[str, dict[str, str]] = {}
         self._stacks: dict[str, contextlib.AsyncExitStack] = {}
+        self.startup_timeout_seconds = max(
+            5,
+            int(os.getenv("MCP_SERVER_START_TIMEOUT_SECONDS", "20")),
+        )
 
     @staticmethod
     def _load_config(config_path: Path) -> dict[str, Any]:
-        if not config_path.exists():
-            logger.warning("MCP config not found at %s", config_path)
+        try:
+            if not config_path.exists():
+                logger.warning("MCP config not found at %s", config_path)
+                return {"servers": []}
+            with config_path.open("r", encoding="utf-8") as handle:
+                payload = yaml.safe_load(handle) or {"servers": []}
+            if not isinstance(payload, dict):
+                logger.warning("Invalid MCP config shape at %s; expected mapping", config_path)
+                return {"servers": []}
+            servers = payload.get("servers", [])
+            if not isinstance(servers, list):
+                logger.warning("Invalid MCP config servers entry at %s; expected list", config_path)
+                return {"servers": []}
+            return payload
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Failed to load MCP config at %s: %s", config_path, exc)
             return {"servers": []}
-        with config_path.open("r", encoding="utf-8") as handle:
-            return yaml.safe_load(handle) or {"servers": []}
 
     def _expand_env(self, value: str) -> str:
         return Template(value).safe_substitute(os.environ)
@@ -68,6 +84,20 @@ class MCPManager:
         return normalized
 
     @staticmethod
+    def _normalize_known_server_args(name: str, command: str, args: list[str]) -> list[str]:
+        normalized = list(args)
+        if (
+            command == "npx"
+            and name == "pdf"
+            and "@modelcontextprotocol/server-pdf" in normalized
+            and "--stdio" not in normalized
+        ):
+            # server-pdf defaults to HTTP mode when --stdio is missing.
+            # Enforce stdio so the MCP client always receives JSON-RPC frames.
+            normalized.append("--stdio")
+        return normalized
+
+    @staticmethod
     def _command_exists(command: str) -> bool:
         return shutil.which(command) is not None
 
@@ -77,7 +107,24 @@ class MCPManager:
             if not server.get("enabled", False):
                 self.server_status[name] = {"status": "disabled", "message": "server disabled in config"}
                 continue
-            await self.start_server(name, server)
+            try:
+                await asyncio.wait_for(
+                    self.start_server(name, server),
+                    timeout=self.startup_timeout_seconds,
+                )
+            except TimeoutError:
+                self.server_status[name] = {
+                    "status": "failed",
+                    "message": f"startup timed out after {self.startup_timeout_seconds}s",
+                }
+                logger.warning(
+                    "MCP server '%s' startup timed out after %ss",
+                    name,
+                    self.startup_timeout_seconds,
+                )
+            except Exception as exc:  # noqa: BLE001
+                self.server_status[name] = {"status": "failed", "message": str(exc)}
+                logger.exception("MCP server '%s' failed during initialization: %s", name, exc)
 
     async def start_server(self, name: str, config: dict):
         stack: contextlib.AsyncExitStack | None = None
@@ -104,6 +151,7 @@ class MCPManager:
             for arg in args:
                 unresolved_keys.update(self._find_unresolved_placeholders(arg))
             args = self._normalize_legacy_stdio_args(command, args)
+            args = self._normalize_known_server_args(name, command, args)
             if unresolved_keys:
                 missing = ", ".join(sorted(unresolved_keys))
                 self.server_status[name] = {

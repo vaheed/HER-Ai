@@ -9,6 +9,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         bash \
+        git \
         ca-certificates \
         curl \
         wget \
@@ -48,4 +49,4 @@ RUN chown sandbox:sandbox /home/sandbox/.config/her/mcp_servers.local.yaml
 USER sandbox
 WORKDIR /workspace
 
-CMD ["bash", "-lc", "tail -f /dev/null"]
+CMD ["bash", "-lc", "echo \"[sandbox] Ready: container=$(hostname) user=$(whoami) workspace=/workspace\"; tail -f /dev/null"]

@@ -12,9 +12,13 @@ if [ -d "$DEFAULT_CONFIG_DIR" ]; then
   # writable by the non-root app user.
   if [ -w "$RUNTIME_CONFIG_DIR" ]; then
     cp -rn "$DEFAULT_CONFIG_DIR"/. "$RUNTIME_CONFIG_DIR"/
+    export HER_CONFIG_DIR="$RUNTIME_CONFIG_DIR"
   else
     echo "[entrypoint] Runtime config dir '$RUNTIME_CONFIG_DIR' is not writable; skipping seed copy and using defaults fallback." >&2
+    export HER_CONFIG_DIR="$DEFAULT_CONFIG_DIR"
   fi
+elif [ -d "$RUNTIME_CONFIG_DIR" ]; then
+  export HER_CONFIG_DIR="$RUNTIME_CONFIG_DIR"
 fi
 
 exec "$@"

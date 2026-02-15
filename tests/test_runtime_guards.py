@@ -133,11 +133,14 @@ def test_entrypoint_skips_config_seed_when_runtime_volume_is_readonly() -> None:
     source = Path("her-core/docker-entrypoint.sh").read_text()
     assert 'if [ -w "$RUNTIME_CONFIG_DIR" ]' in source
     assert 'skipping seed copy' in source
+    assert 'export HER_CONFIG_DIR="$DEFAULT_CONFIG_DIR"' in source
 
 
 def test_config_resolution_checks_baked_defaults_before_repo_fallback() -> None:
     source = Path("her-core/utils/config_paths.py").read_text()
-    assert 'Path("/app/config.defaults") / filename' in source
+    assert 'Path("/app/config.defaults")' in source
+    assert "prefer_defaults" in source
+    assert "os.access(runtime_config_dir, os.W_OK)" in source
     assert 'return Path(__file__).resolve().parents[2] / "config" / filename' in source
 
 
@@ -195,6 +198,12 @@ def test_sandbox_security_and_network_tools_are_registered() -> None:
     assert "SandboxSecurityScanTool" in tools_source
 
 
+def test_sandbox_container_emits_startup_ready_log() -> None:
+    source = Path("sandbox/Dockerfile").read_text()
+    assert "[sandbox] Ready:" in source
+    assert "tail -f /dev/null" in source
+
+
 def test_runtime_capability_degradation_is_logged_and_published() -> None:
     main_source = Path("her-core/main.py").read_text()
     tools_source = Path("her-core/her_mcp/tools.py").read_text()
@@ -221,10 +230,34 @@ def test_mcp_profiles_avoid_legacy_transport_flags() -> None:
             assert "--transport" not in args
 
 
+def test_mcp_pdf_server_uses_stdio_mode_in_profiles() -> None:
+    for profile_path in ("config/mcp_servers.yaml", "config/mcp_servers.local.yaml"):
+        profile = yaml.safe_load(Path(profile_path).read_text())
+        pdf_server = next(server for server in profile.get("servers", []) if server.get("name") == "pdf")
+        assert "--stdio" in pdf_server.get("args", [])
+
+
 def test_mcp_manager_reports_missing_env_placeholders_clearly() -> None:
     source = Path("her-core/her_mcp/manager.py").read_text()
     assert "_find_unresolved_placeholders" in source
     assert "missing required environment variable(s)" in source
+
+
+def test_mcp_manager_startup_is_timeout_bounded_and_pdf_stdio_hardened() -> None:
+    source = Path("her-core/her_mcp/manager.py").read_text()
+    assert "MCP_SERVER_START_TIMEOUT_SECONDS" in source
+    assert "asyncio.wait_for(" in source
+    assert "_normalize_known_server_args" in source
+    assert "and name == \"pdf\"" in source
+    assert "normalized.append(\"--stdio\")" in source
+
+
+def test_main_degrades_when_mcp_bootstrap_or_tool_wiring_fails() -> None:
+    source = Path("her-core/main.py").read_text()
+    assert "MCP bootstrap failed; continuing without MCP servers" in source
+    assert "Tool integration failed; falling back to no-tool mode" in source
+    assert "if mcp_manager is not None:" in source
+    assert "await mcp_manager.stop_all_servers()" in source
 
 
 def test_memory_degrades_to_fallback_when_backends_are_unavailable() -> None:
@@ -238,3 +271,10 @@ def test_memory_degrades_to_fallback_when_backends_are_unavailable() -> None:
     assert "FallbackMemory" in telegram_source
     assert "FallbackMemory" in memory_init_source
     assert "_fallback_cache" in redis_source
+
+
+def test_known_crewai_pydantic_mix_warning_is_suppressed() -> None:
+    source = Path("her-core/sitecustomize.py").read_text()
+    assert "warnings.filterwarnings(" in source
+    assert "CrewAgentExecutor" in source
+    assert "pydantic\\._internal\\._generate_schema" in source

@@ -110,21 +110,37 @@ async def async_main(config: AppConfig) -> None:
         logger.warning("Long-term memory unavailable; using in-process fallback memory: %s", exc)
         memory = FallbackMemory()
 
+    mcp_manager = None
+    status: dict[str, dict[str, str]] = {}
     logger.info("Initializing MCP servers...")
     mcp_config_path = os.getenv("MCP_CONFIG_PATH", "mcp_servers.yaml")
-    mcp_manager = MCPManager(config_path=mcp_config_path)
-    await mcp_manager.initialize()
-    status = mcp_manager.get_server_status()
-    logger.info("✓ MCP servers started from '%s': %s", mcp_config_path, status)
+    try:
+        mcp_manager = MCPManager(config_path=mcp_config_path)
+        await mcp_manager.initialize()
+        status = mcp_manager.get_server_status()
+        logger.info("✓ MCP servers started from '%s': %s", mcp_config_path, status)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("MCP bootstrap failed; continuing without MCP servers: %s", exc)
+        mcp_manager = None
+        status = {"mcp": {"status": "failed", "message": f"bootstrap error: {exc}"}}
 
     logger.info("Creating MCP tools...")
-    mcp_tools = MCPToolsIntegration(mcp_manager)
-    tools = mcp_tools.create_curated_tools()
+    try:
+        if mcp_manager is None:
+            tools = []
+            mcp_tools = None
+        else:
+            mcp_tools = MCPToolsIntegration(mcp_manager)
+            tools = mcp_tools.create_curated_tools()
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Tool integration failed; falling back to no-tool mode: %s", exc)
+        tools = []
+        mcp_tools = None
     logger.info("✓ Created %s tools", len(tools))
     capability_snapshot = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "tool_count": len(tools),
-        "capabilities": mcp_tools.get_capability_status(),
+        "capabilities": mcp_tools.get_capability_status() if mcp_tools else {},
         "mcp_servers": status,
     }
     _log_degraded_capabilities(capability_snapshot)
@@ -197,7 +213,8 @@ async def async_main(config: AppConfig) -> None:
     finally:
         await scheduler.stop()
         await bot.stop()
-        await mcp_manager.stop_all_servers()
+        if mcp_manager is not None:
+            await mcp_manager.stop_all_servers()
 
     # compatibility with phase-1 smoke checks
     if config.startup_warmup_enabled:

@@ -23,10 +23,27 @@ def resolve_config_file(filename: str) -> Path:
     if env_config_dir:
         candidates.append(Path(env_config_dir) / filename)
 
+    # In container runtimes where /app/config is mounted but not writable by appuser,
+    # prefer baked defaults to avoid stale, unseeded runtime volumes.
+    runtime_config_dir = Path("/app/config")
+    defaults_config_dir = Path("/app/config.defaults")
+    prefer_defaults = runtime_config_dir.exists() and not os.access(runtime_config_dir, os.W_OK)
+
+    container_candidates: list[Path]
+    if prefer_defaults:
+        container_candidates = [
+            defaults_config_dir / filename,
+            runtime_config_dir / filename,
+        ]
+    else:
+        container_candidates = [
+            runtime_config_dir / filename,
+            defaults_config_dir / filename,
+        ]
+
     candidates.extend(
         [
-            Path("/app/config") / filename,
-            Path("/app/config.defaults") / filename,
+            *container_candidates,
             Path(__file__).resolve().parents[2] / "config" / filename,
             Path.cwd() / "config" / filename,
         ]

@@ -50,10 +50,12 @@ Default MCP profile in this repo: `config/mcp_servers.yaml`
 - Enabled by default: `fetch`, `filesystem`, `postgres`, `memory`, `sequential-thinking`, `pdf`
 - Disabled by default: `puppeteer`
 - Node MCP server args in this repo intentionally avoid legacy `--transport stdio` flags because current npm MCP packages often treat that flag as positional input (for example, filesystem path or database URL) and fail startup.
+- `@modelcontextprotocol/server-pdf` is pinned to stdio mode via `--stdio`; without it, newer releases may start an HTTP endpoint and break MCP JSON-RPC stdio parsing.
 
 Required environment variables for this profile are documented in `.env.example`:
 `POSTGRES_URL` (`BRAVE_API_KEY` only if enabling `brave-search`).
 You can switch profiles with `MCP_CONFIG_PATH` (for example: `mcp_servers.local.yaml`).
+Per-server startup timeout is controlled by `MCP_SERVER_START_TIMEOUT_SECONDS` (default `20`); timed-out/failed servers are marked unavailable and startup continues.
 Global timezone is set with `TZ` (default `UTC`) and passed to all runtime containers in `docker-compose.yml`.
 
 ## ✅ Ready-to-use local MCP profile

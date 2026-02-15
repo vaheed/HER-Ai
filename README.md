@@ -180,6 +180,7 @@ REDIS_PASSWORD=redis_secure_password
 
 # MCP / Sandbox
 MCP_CONFIG_PATH=mcp_servers.yaml
+MCP_SERVER_START_TIMEOUT_SECONDS=20
 SANDBOX_CONTAINER_NAME=her-sandbox
 TZ=UTC
 ```
@@ -196,6 +197,8 @@ Configuration files are located in `config/`:
 - `config/scheduler.yaml` - Scheduled tasks configuration
 
 > **📖 For detailed configuration options**, see [docs/architecture.md](docs/architecture.md#-configuration-management)
+>
+> Runtime note: inside the container, when `/app/config` is read-only, entrypoint automatically falls back to `/app/config.defaults` via `HER_CONFIG_DIR` so startup continues with valid defaults.
 
 Set `MCP_CONFIG_PATH=mcp_servers.local.yaml` if you want the no-key local MCP profile.
 

@@ -6,15 +6,17 @@ The HER Admin Dashboard is a comprehensive Streamlit application that provides r
 
 ### 📊 Overview Dashboard
 - **Key Metrics**: Total messages, tokens, users, memories at a glance
-- **Recent Activity**: Latest user interactions and events
-- **Memory Categories**: Visual breakdown of memory types
+- **Capability Diagnostics**: Internet/sandbox/MCP status with reasons, server table, and startup history trend
+- **MCP Failure Report**: Error counts by server and top recurring failure messages
+- **Traffic & Log Trends**: Messages/tokens over time and log-level distribution charts
+- **Memory Summary**: Side-by-side short-memory (Redis) and long-memory (PostgreSQL) health cards
 - **System Status**: Service connectivity and environment info
-- **Capability Status**: Internet, sandbox, and MCP availability with explicit degradation reasons
 
 ### 📋 Logs Page
 - **Real-time System Logs**: View all application logs from Redis
 - **Filtering**: Filter by log level (INFO, WARNING, ERROR, DEBUG)
 - **Search**: Search logs by keyword
+- **MCP Error Analytics**: Dedicated diagnostics for MCP startup/JSON-RPC failures
 - **Auto-refresh**: Automatically update logs at configurable intervals
 
 ### 💬 Recent Chats Page
@@ -41,9 +43,11 @@ The HER Admin Dashboard is a comprehensive Streamlit application that provides r
 - **Performance Metrics**: Response times and system performance
 
 ### 💾 Memory Page
-- **Memory Statistics**: Total memories, users with memories
-- **Category Breakdown**: Visual charts of memory categories
-- **Memory Creation Trends**: Daily memory creation over last 30 days
+- **Short Memory Report**: Redis context thread totals, role distribution, largest threads
+- **Long Memory Report**: Totals, 24h growth, average importance, top users
+- **Category Breakdown**: Visual charts of long-memory categories
+- **Memory Creation Trends**: Daily long-memory creation over last 30 days
+- **Recent Long-Memory Feed**: Latest persisted memory rows
 - **Memory Search**: Search memories by keyword with full-text search
 - **Schema Compatibility**: Supports both legacy memory schema and Mem0 payload schema
 

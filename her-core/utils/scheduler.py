@@ -10,12 +10,14 @@ Supports cron-like scheduling for:
 """
 
 import asyncio
+import json
 import logging
 import os
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
+from urllib.request import Request, urlopen
 
 import yaml
 
@@ -192,6 +194,10 @@ class TaskScheduler:
             elif task_type == "custom":
                 await self._execute_custom_task(task)
                 success = True
+                result = "Custom task processed"
+            elif task_type == "workflow":
+                result = await self._execute_workflow_task(task)
+                success = True
             else:
                 error = f"Unknown task type: {task_type}"
                 logger.warning(error)
@@ -283,6 +289,189 @@ class TaskScheduler:
             logger.info("Executing custom command: %s", command)
             # Could execute in sandbox or via subprocess
             # For now, just log it
+
+    async def _send_telegram_notification(self, chat_id: int, text: str) -> bool:
+        """Send scheduler notifications via Telegram Bot API."""
+        token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+        if not token:
+            logger.warning("Cannot send scheduler notification: TELEGRAM_BOT_TOKEN missing")
+            return False
+        try:
+            from telegram import Bot
+
+            bot = Bot(token=token)
+            await bot.send_message(chat_id=chat_id, text=text)
+            return True
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Failed to send scheduler Telegram notification: %s", exc)
+            return False
+
+    @staticmethod
+    def _resolve_notify_user_id(task: dict[str, Any]) -> int | None:
+        candidate = task.get("notify_user_id")
+        if candidate is None:
+            candidate = os.getenv("ADMIN_USER_ID", "")
+        text = str(candidate).strip()
+        if text.isdigit():
+            return int(text)
+        return None
+
+    @staticmethod
+    def _safe_eval(expression: str, context: dict[str, Any]) -> Any:
+        safe_globals = {
+            "__builtins__": {},
+            "abs": abs,
+            "min": min,
+            "max": max,
+            "sum": sum,
+            "len": len,
+            "round": round,
+            "int": int,
+            "float": float,
+            "str": str,
+            "bool": bool,
+        }
+        return eval(expression, safe_globals, context)  # noqa: S307
+
+    @staticmethod
+    def _format_template(template: str, context: dict[str, Any]) -> str:
+        rendered = template
+        for key, value in context.items():
+            placeholder = "{" + str(key) + "}"
+            if placeholder in rendered:
+                rendered = rendered.replace(placeholder, str(value))
+        return rendered
+
+    @staticmethod
+    def _fetch_json(url: str, timeout_seconds: int = 10) -> dict[str, Any] | list[Any] | None:
+        try:
+            with urlopen(url, timeout=timeout_seconds) as response:
+                return json.loads(response.read().decode("utf-8"))
+        except Exception:  # noqa: BLE001
+            return None
+
+    async def _execute_workflow_step(
+        self,
+        task: dict[str, Any],
+        step: dict[str, Any],
+        context: dict[str, Any],
+    ) -> str:
+        if "when" in step:
+            if not bool(self._safe_eval(str(step.get("when", "True")), context)):
+                return "step skipped (when=false)"
+
+        action = str(step.get("action", "")).strip().lower()
+        if not action:
+            return "step skipped: missing action"
+
+        if action == "fetch_json":
+            url = self._format_template(str(step.get("url", "")), context)
+            if not url:
+                return "fetch_json failed: missing url"
+            data = self._fetch_json(url)
+            if data is None:
+                return f"fetch_json failed: {url}"
+            save_as = str(step.get("save_as", "data")).strip() or "data"
+            context[save_as] = data
+            return f"fetch_json ok -> {save_as}"
+
+        if action == "set":
+            key = str(step.get("key", "")).strip()
+            if not key:
+                return "set failed: missing key"
+            if "expr" in step:
+                value = self._safe_eval(str(step.get("expr", "")), context)
+            else:
+                value = step.get("value")
+            context[key] = value
+            return f"set {key}"
+
+        if action == "set_state":
+            key = str(step.get("key", "")).strip()
+            if not key:
+                return "set_state failed: missing key"
+            state = context.get("state")
+            if not isinstance(state, dict):
+                return "set_state failed: state unavailable"
+            if "expr" in step:
+                value = self._safe_eval(str(step.get("expr", "")), context)
+            else:
+                value = step.get("value")
+            state[key] = value
+            context[key] = value
+            return f"set_state {key}"
+
+        if action == "notify":
+            user_id = self._resolve_notify_user_id(task)
+            if user_id is None:
+                return "notify failed: notify_user_id missing"
+            message = self._format_template(str(step.get("message", "Task triggered")), context)
+            sent = await self._send_telegram_notification(user_id, message)
+            return "notify sent" if sent else "notify failed"
+
+        if action == "webhook":
+            webhook_url = self._format_template(str(step.get("url", "")), context)
+            if not webhook_url:
+                return "webhook failed: missing url"
+            payload: Any
+            if "payload_expr" in step:
+                payload = self._safe_eval(str(step.get("payload_expr", "")), context)
+            else:
+                payload = step.get("payload", {})
+            request = Request(
+                webhook_url,
+                data=json.dumps(payload).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urlopen(request, timeout=10):
+                pass
+            return "webhook sent"
+
+        if action == "log":
+            message = self._format_template(str(step.get("message", "")), context)
+            logger.info("Workflow task '%s': %s", task.get("name", "unknown"), message)
+            return "log written"
+
+        return f"unknown action: {action}"
+
+    async def _execute_workflow_task(self, task: dict[str, Any]) -> str:
+        """Generic chain-based workflow with condition + actions."""
+        steps = task.get("steps", [])
+        if not isinstance(steps, list) or not steps:
+            return "workflow skipped: missing steps"
+
+        state = task.setdefault("_state", {})
+        if not isinstance(state, dict):
+            state = {}
+            task["_state"] = state
+
+        context: dict[str, Any] = {
+            "task_name": task.get("name", "unknown"),
+            "now_utc": datetime.utcnow().isoformat() + "Z",
+            "state": state,
+            "task": task,
+        }
+
+        # Optional source fetch before evaluating condition.
+        source_url = str(task.get("source_url", "")).strip()
+        if source_url:
+            rendered_url = self._format_template(source_url, context)
+            source_data = self._fetch_json(rendered_url)
+            if source_data is not None:
+                context["source"] = source_data
+
+        condition = str(task.get("condition_expr", "True")).strip() or "True"
+        if not bool(self._safe_eval(condition, context)):
+            return "condition=false"
+
+        outputs: list[str] = []
+        for raw_step in steps:
+            if not isinstance(raw_step, dict):
+                continue
+            outcome = await self._execute_workflow_step(task, raw_step, context)
+            outputs.append(outcome)
+        return "; ".join(outputs) if outputs else "workflow completed"
 
     def add_task(
         self,

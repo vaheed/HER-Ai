@@ -170,6 +170,12 @@ def test_scheduler_supports_runtime_updates_and_persistence() -> None:
     assert "def set_task_enabled" in source
     assert "def run_task_now" in source
     assert "def is_valid_interval" in source
+    assert 'task_type == "workflow"' in source
+    assert "def _execute_workflow_task" in source
+    assert "def _execute_workflow_step" in source
+    assert 'if "when" in step' in source
+    assert 'if action == "set_state"' in source
+    assert "def _send_telegram_notification" in source
 
 
 def test_mcp_profile_path_is_configurable_via_env() -> None:
@@ -189,6 +195,8 @@ def test_telegram_registers_schedule_admin_command() -> None:
     assert 'CommandHandler("schedule", self.handlers.schedule_command)' in bot_source
     assert "/schedule" in handlers_source
     assert "/schedule - Manage scheduled tasks" in telegram_config
+    assert "[key=value ...]" in handlers_source
+    assert "task_type == \"workflow\"" in handlers_source
 
 
 def test_dashboard_handles_mem0_schema_and_recent_chats() -> None:

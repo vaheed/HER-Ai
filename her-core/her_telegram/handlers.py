@@ -168,7 +168,8 @@ class MessageHandlers:
             lines.append("Use: /schedule set <task> <interval>")
             lines.append("Use: /schedule enable <task> | /schedule disable <task>")
             lines.append("Use: /schedule run <task>")
-            lines.append("Use: /schedule add <name> <type> <interval>")
+            lines.append("Use: /schedule add <name> <type> <interval> [key=value ...]")
+            lines.append("Example: /schedule add any_rule workflow every_5_minutes source_url=https://example/api steps_json='[{\"action\":\"log\",\"message\":\"tick {now_utc}\"}]'")
             await self._reply(update, "\n".join(lines))
             return
 
@@ -221,15 +222,56 @@ class MessageHandlers:
 
         if action == "add":
             if len(args) < 4:
-                await self._reply(update, "Usage: /schedule add <name> <type> <interval>")
+                await self._reply(update, "Usage: /schedule add <name> <type> <interval> [key=value ...]")
                 return
             name, task_type, interval = args[1], args[2], args[3].lower()
             existing_names = {str(t.get('name')) for t in self.scheduler.get_tasks()}
             if name in existing_names:
                 await self._reply(update, f"❌ Task '{name}' already exists")
                 return
+            extra_args: dict[str, Any] = {}
+            for token in args[4:]:
+                if "=" not in token:
+                    continue
+                key, raw_value = token.split("=", 1)
+                key = key.strip()
+                value_text = raw_value.strip()
+                if (value_text.startswith("'") and value_text.endswith("'")) or (
+                    value_text.startswith('"') and value_text.endswith('"')
+                ):
+                    value_text = value_text[1:-1]
+                lowered = value_text.lower()
+                if key.endswith("_json"):
+                    parsed_key = key[: -len("_json")] or key
+                    try:
+                        extra_args[parsed_key] = json.loads(value_text)
+                    except json.JSONDecodeError:
+                        await self._reply(update, f"❌ Invalid JSON for '{key}'")
+                        return
+                    continue
+                if lowered in {"true", "false"}:
+                    parsed_value: Any = lowered == "true"
+                else:
+                    try:
+                        if "." in value_text:
+                            parsed_value = float(value_text)
+                        else:
+                            parsed_value = int(value_text)
+                    except ValueError:
+                        parsed_value = value_text
+                if key:
+                    extra_args[key] = parsed_value
+
+            if task_type == "workflow" and "notify_user_id" not in extra_args:
+                extra_args["notify_user_id"] = update.effective_user.id
             try:
-                self.scheduler.add_task(name=name, task_type=task_type, interval=interval, enabled=True)
+                self.scheduler.add_task(
+                    name=name,
+                    task_type=task_type,
+                    interval=interval,
+                    enabled=True,
+                    **extra_args,
+                )
             except ValueError as exc:
                 await self._reply(update, f"❌ {exc}")
                 return

@@ -134,6 +134,18 @@ Run:
 Expected:
 - Immediate execution acknowledgement is returned.
 
+Run (generic workflow rule):
+
+```text
+/schedule add btc_rule workflow every_5_minutes source_url=https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd steps_json='[{"action":"set","key":"price","expr":"float(source[\"bitcoin\"][\"usd\"])"},
+{"action":"notify","when":"state.get(\"last_price\") and ((price-float(state[\"last_price\"]))/float(state[\"last_price\"])*100)>=2","message":"BTC up >=2%, price={price}"},
+{"action":"set_state","key":"last_price","expr":"price"}]'
+```
+
+Expected:
+- Task is created and persisted.
+- Task executes as a chain without introducing new hardcoded task logic.
+
 ---
 
 ## 5) Validate public-mode throttling

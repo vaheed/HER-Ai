@@ -20,3 +20,22 @@ tasks:
   #   interval: "every_30_minutes"
   #   enabled: false
   #   command: "echo 'Hello from scheduler'"
+
+  # Generic workflow example:
+  # Fetches JSON, evaluates a condition expression, then runs chained actions.
+  # - name: "sample_workflow"
+  #   type: "workflow"
+  #   interval: "every_5_minutes"
+  #   enabled: true
+  #   source_url: "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd"
+  #   steps:
+  #     - action: "set"
+  #       key: "price"
+  #       expr: "float(source['bitcoin']['usd'])"
+  #     - action: "notify"
+  #       when: "state.get('last_price') and ((price - float(state['last_price'])) / float(state['last_price']) * 100) >= 2"
+  #       message: "BTC moved up >=2%. price={price} at {now_utc}"
+  #     - action: "set_state"
+  #       key: "last_price"
+  #       expr: "price"
+  #   notify_user_id: 123456789

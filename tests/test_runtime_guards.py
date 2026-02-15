@@ -180,6 +180,10 @@ def test_scheduler_supports_runtime_updates_and_persistence() -> None:
     assert "def get_upcoming_jobs" in source
     assert "her:scheduler:state" in source
     assert 'task.get("at"' in source
+    assert '"once"' in source
+    assert "max_retries" in source
+    assert "retry_delay_seconds" in source
+    assert "one_time" in source
 
 
 def test_mcp_profile_path_is_configurable_via_env() -> None:
@@ -202,6 +206,9 @@ def test_telegram_registers_schedule_admin_command() -> None:
     assert "/schedule - Manage scheduled tasks" in telegram_config
     assert "[key=value ...]" in handlers_source
     assert "task_type == \"workflow\"" in handlers_source
+    assert "def _maybe_schedule_from_message" in handlers_source
+    assert "def _parse_schedule_request" in handlers_source
+    assert "Got it. I'll remind you" in handlers_source
 
 
 def test_dashboard_handles_mem0_schema_and_recent_chats() -> None:

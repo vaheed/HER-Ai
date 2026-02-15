@@ -86,11 +86,32 @@ class TaskScheduler:
                     continue
                 valid_tasks.append(normalized)
             self.tasks = valid_tasks
+            self._ensure_baseline_tasks()
             logger.info("Loaded %s scheduled tasks", len(self.tasks))
 
         except Exception as exc:  # noqa: BLE001
             logger.error("Failed to load scheduler config: %s", exc)
             self.tasks = []
+            self._ensure_baseline_tasks()
+
+    def _ensure_baseline_tasks(self) -> None:
+        required = {
+            "name": "memory_reflection",
+            "type": "memory_reflection",
+            "interval": "hourly",
+            "enabled": True,
+            "max_retries": 2,
+            "retry_delay_seconds": 30,
+        }
+        for task in self.tasks:
+            if str(task.get("name", "")).strip() == "memory_reflection":
+                task["enabled"] = True
+                if str(task.get("interval", "")).strip().lower() != "hourly":
+                    task["interval"] = "hourly"
+                task.setdefault("max_retries", 2)
+                task.setdefault("retry_delay_seconds", 30)
+                return
+        self.tasks.append(required)
 
     def _normalize_task(self, task: Any) -> dict[str, Any] | None:
         if not isinstance(task, dict):
@@ -113,6 +134,18 @@ class TaskScheduler:
         normalized["interval"] = interval
         normalized["type"] = task_type
         normalized["enabled"] = bool(task.get("enabled", True))
+        normalized["one_time"] = bool(task.get("one_time", interval == "once"))
+        normalized.setdefault("max_retries", 2)
+        normalized.setdefault("retry_delay_seconds", 30)
+
+        run_at_value = str(task.get("run_at", "")).strip()
+        if run_at_value:
+            parsed_run_at = self._parse_iso_timestamp(run_at_value)
+            if parsed_run_at is None:
+                logger.warning("Task '%s' has invalid run_at '%s' (expected ISO8601)", name, run_at_value)
+                normalized.pop("run_at", None)
+            else:
+                normalized["run_at"] = parsed_run_at.isoformat()
 
         at_value = str(task.get("at", "")).strip()
         if at_value and not self._is_valid_clock_time(at_value):
@@ -140,7 +173,7 @@ class TaskScheduler:
     @staticmethod
     def is_valid_interval(interval: str) -> bool:
         """Validate supported interval formats."""
-        if interval in {"hourly", "daily", "weekly"}:
+        if interval in {"hourly", "daily", "weekly", "once"}:
             return True
         if interval.startswith("every_"):
             parts = interval.split("_")
@@ -231,8 +264,9 @@ class TaskScheduler:
                         continue
 
                     if self._should_run(now, task):
-                        await self._execute_task(task)
-                        task["_last_run"] = now.isoformat()
+                        success = await self._execute_task(task)
+                        if success or not bool(task.get("retry_on_failure", True)):
+                            task["_last_run"] = now.isoformat()
                         dirty = True
 
                     next_run = self._compute_next_run(now, task)
@@ -241,6 +275,9 @@ class TaskScheduler:
                         if task.get("_next_run") != serialized:
                             task["_next_run"] = serialized
                             dirty = True
+                    elif task.get("_next_run"):
+                        task.pop("_next_run", None)
+                        dirty = True
 
                 if dirty:
                     self._persist_runtime_state()
@@ -347,6 +384,15 @@ class TaskScheduler:
     def _compute_next_run(self, now_utc: datetime, task: dict[str, Any]) -> datetime | None:
         interval = str(task.get("interval", ""))
         last_run_dt = self._parse_iso_timestamp(task.get("_last_run"))
+        run_at_dt = self._parse_iso_timestamp(task.get("run_at"))
+
+        if run_at_dt is not None:
+            if last_run_dt is not None and last_run_dt >= run_at_dt:
+                return None
+            return run_at_dt
+
+        if interval == "once":
+            return None
 
         time_based_next = self._compute_next_time_based_run(now_utc, task, interval, last_run_dt)
         if time_based_next is not None:
@@ -372,47 +418,61 @@ class TaskScheduler:
 
         return now_utc >= next_run_dt
 
-    async def _execute_task(self, task: dict[str, Any]):
+    async def _execute_task(self, task: dict[str, Any]) -> bool:
         """Execute a scheduled task."""
         task_name = task.get("name", "unknown")
         task_type = task.get("type", "custom")
-        start_time = time.time()
-
-        logger.info("Executing scheduled task: %s (type: %s)", task_name, task_type)
-
+        max_retries = max(0, int(task.get("max_retries", 2) or 0))
+        retry_delay = max(1, int(task.get("retry_delay_seconds", 30) or 30))
+        attempts_total = max_retries + 1
+        attempt = 0
         success = False
         result = ""
         error = ""
+        execution_time = 0.0
 
-        try:
-            if task_type == "twitter":
-                result = await self._execute_twitter_task(task)
-                success = True
-            elif task_type == "memory_reflection":
-                await self._execute_reflection_task(task)
-                success = True
-                result = "Memory reflection completed"
-            elif task_type == "custom":
-                await self._execute_custom_task(task)
-                success = True
-                result = "Custom task processed"
-            elif task_type == "workflow":
-                result = await self._execute_workflow_task(task)
-                success = True
-            elif task_type == "reminder":
-                result = await self._execute_reminder_task(task)
-                success = result.startswith("Reminder sent")
-                if not success:
-                    error = result
-            else:
-                error = f"Unknown task type: {task_type}"
-                logger.warning(error)
+        while attempt < attempts_total and not success:
+            attempt += 1
+            start_time = time.time()
+            logger.info(
+                "Executing scheduled task: %s (type: %s, attempt %s/%s)",
+                task_name,
+                task_type,
+                attempt,
+                attempts_total,
+            )
+            result = ""
+            error = ""
+            try:
+                if task_type == "twitter":
+                    result = await self._execute_twitter_task(task)
+                    success = True
+                elif task_type == "memory_reflection":
+                    await self._execute_reflection_task(task)
+                    success = True
+                    result = "Memory reflection completed"
+                elif task_type == "custom":
+                    await self._execute_custom_task(task)
+                    success = True
+                    result = "Custom task processed"
+                elif task_type == "workflow":
+                    result = await self._execute_workflow_task(task)
+                    success = True
+                elif task_type == "reminder":
+                    result = await self._execute_reminder_task(task)
+                    success = result.startswith("Reminder sent")
+                    if not success:
+                        error = result
+                else:
+                    error = f"Unknown task type: {task_type}"
+                    logger.warning(error)
+            except Exception as exc:  # noqa: BLE001
+                error = str(exc)
+                logger.exception("Task execution failed: %s", exc)
+            execution_time = time.time() - start_time
+            if not success and attempt < attempts_total:
+                await asyncio.sleep(retry_delay)
 
-        except Exception as exc:  # noqa: BLE001
-            error = str(exc)
-            logger.exception("Task execution failed: %s", exc)
-
-        execution_time = time.time() - start_time
         next_run = task.get("_next_run", "")
         self._log_job_execution(task_name, task_type, success, result, error, execution_time, str(next_run))
         self._decision_logger.log(
@@ -425,8 +485,13 @@ class TaskScheduler:
                 "success": success,
                 "error": error,
                 "next_run": str(next_run),
+                "attempts": attempt,
             },
         )
+        if success and bool(task.get("one_time", False)):
+            task["enabled"] = False
+            task.pop("_next_run", None)
+        return success
 
     def _log_job_execution(
         self,
@@ -749,6 +814,8 @@ class TaskScheduler:
             next_run = self._compute_next_run(now_utc, task)
             if next_run:
                 task["_next_run"] = next_run.isoformat()
+            else:
+                task.pop("_next_run", None)
 
     def get_upcoming_jobs(self, limit: int = 20) -> list[dict[str, Any]]:
         upcoming: list[dict[str, Any]] = []
@@ -763,6 +830,10 @@ class TaskScheduler:
                     "interval": task.get("interval", ""),
                     "timezone": task.get("timezone", os.getenv("TZ", "UTC")),
                     "at": task.get("at", ""),
+                    "run_at": task.get("run_at", ""),
+                    "one_time": bool(task.get("one_time", False)),
+                    "max_retries": int(task.get("max_retries", 2) or 0),
+                    "retry_delay_seconds": int(task.get("retry_delay_seconds", 30) or 0),
                     "next_run": next_run,
                     "enabled": bool(task.get("enabled", True)),
                 }
@@ -797,7 +868,7 @@ class TaskScheduler:
         interval = interval.lower().strip()
         if not self.is_valid_interval(interval):
             raise ValueError(
-                "Invalid interval. Use hourly|daily|weekly|every_<N>_minutes|every_<N>_hours|every_<N>_days"
+                "Invalid interval. Use once|hourly|daily|weekly|every_<N>_minutes|every_<N>_hours|every_<N>_days"
             )
         task = {
             "name": name,
@@ -820,7 +891,7 @@ class TaskScheduler:
         interval = interval.lower().strip()
         if not self.is_valid_interval(interval):
             raise ValueError(
-                "Invalid interval. Use hourly|daily|weekly|every_<N>_minutes|every_<N>_hours|every_<N>_days"
+                "Invalid interval. Use once|hourly|daily|weekly|every_<N>_minutes|every_<N>_hours|every_<N>_days"
             )
         for task in self.tasks:
             if task.get("name") == name:
@@ -851,15 +922,18 @@ class TaskScheduler:
         """Execute a configured task immediately by name."""
         for task in self.tasks:
             if task.get("name") == name:
-                await self._execute_task(task)
+                success = await self._execute_task(task)
                 now = datetime.now(timezone.utc)
-                task["_last_run"] = now.isoformat()
+                if success or not bool(task.get("retry_on_failure", True)):
+                    task["_last_run"] = now.isoformat()
                 next_run = self._compute_next_run(now, task)
                 if next_run:
                     task["_next_run"] = next_run.isoformat()
+                else:
+                    task.pop("_next_run", None)
                 self._persist_runtime_state()
                 self._publish_scheduler_state()
-                return True, "executed"
+                return True, "executed" if success else "failed"
         return False, "task not found"
 
     def get_tasks(self) -> list[dict[str, Any]]:

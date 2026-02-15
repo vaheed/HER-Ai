@@ -84,6 +84,7 @@ docker compose logs -f her-bot
 ### 📱 Dual-Mode Interface
 - **Admin Mode**: Full access, personality tuning, memory management
 - **Public Mode**: User interactions, approval-based features
+- **Natural Scheduling**: Users can request reminders/jobs in plain language (no `/schedule` syntax required)
 
 ### 📊 Real-Time Dashboard
 - **Monitoring**: Conversation logs, agent activity, system health
@@ -197,6 +198,7 @@ Configuration files are located in `config/`:
 - `config/mcp_servers.yaml` - MCP server integrations
 - `config/telegram.yaml` - Telegram bot settings
 - `config/scheduler.yaml` - Scheduled tasks configuration
+  - Includes autonomous hourly `memory_reflection` baseline task
 
 > **📖 For detailed configuration options**, see [docs/architecture.md](docs/architecture.md#-configuration-management)
 >

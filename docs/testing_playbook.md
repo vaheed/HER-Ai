@@ -146,6 +146,28 @@ Expected:
 - Task is created and persisted.
 - Task executes as a chain without introducing new hardcoded task logic.
 
+### 4.7 Natural-language scheduling (no slash command)
+
+Send:
+
+```text
+Remind me to stretch in 15 minutes
+```
+
+Expected:
+- HER confirms naturally (for example: `Got it. I'll remind you in 15 minutes.`).
+- A one-time scheduler task is created internally and persisted.
+
+Send:
+
+```text
+Remind me every day at 9am to review my goals
+```
+
+Expected:
+- HER confirms recurring reminder setup naturally.
+- Task appears in dashboard Jobs page under Upcoming Jobs.
+
 Run (time-based reminder):
 
 ```text

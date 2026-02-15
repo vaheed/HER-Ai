@@ -1,8 +1,8 @@
 import logging
 import os
-from datetime import UTC, datetime
-import json
 import re
+from datetime import UTC, datetime, timedelta
+import json
 from typing import Any
 from urllib.error import URLError
 from urllib.request import urlopen
@@ -24,6 +24,15 @@ from utils.scheduler import TaskScheduler
 
 logger = logging.getLogger(__name__)
 _INTERNET_DENIAL_PATTERN = re.compile(r"\b(no|not|cannot|can't)\b.*\binternet\b", re.IGNORECASE)
+_WEEKDAY_TO_INDEX = {
+    "monday": 0,
+    "tuesday": 1,
+    "wednesday": 2,
+    "thursday": 3,
+    "friday": 4,
+    "saturday": 5,
+    "sunday": 6,
+}
 
 
 class MessageHandlers:
@@ -450,6 +459,281 @@ class MessageHandlers:
             logger.debug("Reflection extraction skipped: %s", exc)
             return []
 
+    @staticmethod
+    def _slug(text: str, max_len: int = 48) -> str:
+        clean = re.sub(r"[^a-z0-9]+", "_", text.lower()).strip("_")
+        if not clean:
+            clean = "task"
+        return clean[:max_len]
+
+    @staticmethod
+    def _parse_clock(text: str) -> tuple[int, int] | None:
+        match = re.search(r"\bat\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b", text, re.IGNORECASE)
+        if not match:
+            return None
+        hour = int(match.group(1))
+        minute = int(match.group(2) or "0")
+        meridian = (match.group(3) or "").lower()
+        if meridian == "pm" and hour < 12:
+            hour += 12
+        if meridian == "am" and hour == 12:
+            hour = 0
+        if 0 <= hour <= 23 and 0 <= minute <= 59:
+            return hour, minute
+        return None
+
+    @staticmethod
+    def _extract_reminder_body(message: str) -> str:
+        text = message.strip()
+        lowered = text.lower()
+        patterns = [
+            r"remind me to\s+(.+)",
+            r"remind me\s+(.+)",
+            r"remember to\s+(.+)",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, lowered, re.IGNORECASE)
+            if match:
+                start = match.start(1)
+                body = text[start:].strip(" .")
+                body = re.sub(
+                    r"\s+(in\s+\d+\s+(minutes?|hours?|days?)|tomorrow(?:\s+at\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?)?|"
+                    r"next\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)(?:\s+at\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?)?|"
+                    r"every\s+\d+\s+(minutes?|hours?|days?)|every day|daily|once a week|every week|weekly)\b.*$",
+                    "",
+                    body,
+                    flags=re.IGNORECASE,
+                ).strip(" .")
+                return body or "your reminder"
+        return text[:220]
+
+    def _goal_growth_intent(self, message: str) -> bool:
+        lower = message.lower()
+        phrases = [
+            "help me grow",
+            "improve me",
+            "track my habits",
+            "keep me accountable",
+            "build better habits",
+            "help me improve",
+        ]
+        return any(phrase in lower for phrase in phrases)
+
+    def _parse_schedule_request(self, message: str, user_id: int) -> tuple[dict[str, Any] | None, str | None]:
+        if not self.scheduler:
+            return None, None
+
+        text = message.strip()
+        lower = text.lower()
+        now = datetime.now(UTC)
+        reminder_body = self._extract_reminder_body(text)
+        clock = self._parse_clock(text) or (9, 0)
+        future_intent = any(
+            marker in lower for marker in ("remind", "remember", "schedule", "i need to", "i should", "don't let me forget")
+        )
+
+        # Goal-oriented recurring automation
+        if self._goal_growth_intent(text):
+            task_name = f"growth_checkin_{user_id}"
+            return (
+                {
+                    "name": task_name,
+                    "type": "workflow",
+                    "interval": "daily",
+                    "enabled": True,
+                    "at": "20:00",
+                    "timezone": os.getenv("TZ", "UTC"),
+                    "notify_user_id": user_id,
+                    "steps": [
+                        {"action": "notify", "message": "Growth check-in: what improved today and what needs support?"},
+                        {"action": "log", "message": "growth check-in delivered to {task_name}"},
+                    ],
+                    "max_retries": 2,
+                    "retry_delay_seconds": 30,
+                },
+                "Got it. I'll run a daily growth check-in and help you track progress.",
+            )
+
+        # every N minutes/hours/days
+        every_match = re.search(r"\bevery\s+(\d+)\s+(minute|minutes|hour|hours|day|days)\b", lower)
+        if every_match:
+            value = int(every_match.group(1))
+            unit = every_match.group(2)
+            base = "minutes" if "minute" in unit else "hours" if "hour" in unit else "days"
+            interval = f"every_{max(1, value)}_{base}"
+            task_name = f"auto_{self._slug(reminder_body)}_{user_id}"
+            return (
+                {
+                    "name": task_name,
+                    "type": "reminder",
+                    "interval": interval,
+                    "enabled": True,
+                    "message": reminder_body,
+                    "notify_user_id": user_id,
+                    "max_retries": 2,
+                    "retry_delay_seconds": 30,
+                },
+                f"Got it. I'll remind you {interval.replace('_', ' ')}.",
+            )
+
+        # every day / daily
+        if "every day" in lower or "daily" in lower:
+            task_name = f"daily_{self._slug(reminder_body)}_{user_id}"
+            return (
+                {
+                    "name": task_name,
+                    "type": "reminder",
+                    "interval": "daily",
+                    "enabled": True,
+                    "at": f"{clock[0]:02d}:{clock[1]:02d}",
+                    "timezone": os.getenv("TZ", "UTC"),
+                    "message": reminder_body,
+                    "notify_user_id": user_id,
+                    "max_retries": 2,
+                    "retry_delay_seconds": 30,
+                },
+                "Got it. I'll remind you every day.",
+            )
+
+        # once a week / weekly
+        if "once a week" in lower or "every week" in lower or "weekly" in lower:
+            weekday = now.weekday()
+            task_name = f"weekly_{self._slug(reminder_body)}_{user_id}"
+            return (
+                {
+                    "name": task_name,
+                    "type": "reminder",
+                    "interval": "weekly",
+                    "enabled": True,
+                    "at": f"{clock[0]:02d}:{clock[1]:02d}",
+                    "timezone": os.getenv("TZ", "UTC"),
+                    "weekdays": [weekday],
+                    "message": reminder_body,
+                    "notify_user_id": user_id,
+                    "max_retries": 2,
+                    "retry_delay_seconds": 30,
+                },
+                "Got it. I'll remind you once a week.",
+            )
+
+        # in N minutes/hours/days
+        in_match = re.search(r"\bin\s+(\d+)\s+(minute|minutes|hour|hours|day|days)\b", lower)
+        if in_match and future_intent:
+            value = int(in_match.group(1))
+            unit = in_match.group(2)
+            delta = timedelta(minutes=value)
+            if "hour" in unit:
+                delta = timedelta(hours=value)
+            elif "day" in unit:
+                delta = timedelta(days=value)
+            run_at = now + delta
+            task_name = f"once_{self._slug(reminder_body)}_{int(now.timestamp())}_{user_id}"
+            return (
+                {
+                    "name": task_name,
+                    "type": "reminder",
+                    "interval": "once",
+                    "one_time": True,
+                    "enabled": True,
+                    "run_at": run_at.isoformat(),
+                    "timezone": os.getenv("TZ", "UTC"),
+                    "message": reminder_body,
+                    "notify_user_id": user_id,
+                    "max_retries": 2,
+                    "retry_delay_seconds": 30,
+                },
+                f"Got it. I'll remind you in {value} {unit}.",
+            )
+
+        # tomorrow at X
+        if "tomorrow" in lower and future_intent:
+            target = (now + timedelta(days=1)).replace(hour=clock[0], minute=clock[1], second=0, microsecond=0)
+            task_name = f"tomorrow_{self._slug(reminder_body)}_{int(now.timestamp())}_{user_id}"
+            return (
+                {
+                    "name": task_name,
+                    "type": "reminder",
+                    "interval": "once",
+                    "one_time": True,
+                    "enabled": True,
+                    "run_at": target.isoformat(),
+                    "timezone": os.getenv("TZ", "UTC"),
+                    "message": reminder_body,
+                    "notify_user_id": user_id,
+                    "max_retries": 2,
+                    "retry_delay_seconds": 30,
+                },
+                "Got it. I'll remind you tomorrow.",
+            )
+
+        # next Monday ...
+        day_match = re.search(
+            r"\bnext\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b",
+            lower,
+        )
+        if day_match and future_intent:
+            target_day = _WEEKDAY_TO_INDEX[day_match.group(1)]
+            days_ahead = (target_day - now.weekday()) % 7
+            if days_ahead == 0:
+                days_ahead = 7
+            target = (now + timedelta(days=days_ahead)).replace(
+                hour=clock[0],
+                minute=clock[1],
+                second=0,
+                microsecond=0,
+            )
+            task_name = f"next_{day_match.group(1)}_{self._slug(reminder_body)}_{int(now.timestamp())}_{user_id}"
+            return (
+                {
+                    "name": task_name,
+                    "type": "reminder",
+                    "interval": "once",
+                    "one_time": True,
+                    "enabled": True,
+                    "run_at": target.isoformat(),
+                    "timezone": os.getenv("TZ", "UTC"),
+                    "message": reminder_body,
+                    "notify_user_id": user_id,
+                    "max_retries": 2,
+                    "retry_delay_seconds": 30,
+                },
+                f"Got it. I'll remind you next {day_match.group(1).capitalize()}.",
+            )
+
+        return None, None
+
+    def _maybe_schedule_from_message(self, message: str, user_id: int) -> str | None:
+        if not self.scheduler:
+            return None
+        task, confirmation = self._parse_schedule_request(message, user_id)
+        if not task or not confirmation:
+            return None
+
+        existing_names = {str(t.get("name", "")) for t in self.scheduler.get_tasks()}
+        if task["name"] in existing_names and task["name"].startswith("growth_checkin_"):
+            return "I already have your growth check-in active and will keep it running."
+        if task["name"] in existing_names:
+            task["name"] = f"{task['name']}_{int(datetime.now(UTC).timestamp())}"
+
+        self.scheduler.add_task(
+            name=str(task["name"]),
+            interval=str(task["interval"]),
+            task_type=str(task.get("type", "reminder")),
+            enabled=bool(task.get("enabled", True)),
+            **{k: v for k, v in task.items() if k not in {"name", "interval", "type", "enabled"}},
+        )
+        ok, details = self.scheduler.persist_tasks()
+        self._decision_logger.log(
+            event_type="natural_schedule_created",
+            summary=f"Created task '{task['name']}' from natural language",
+            user_id=str(user_id),
+            source="telegram",
+            details={"task": task, "persisted": ok, "details": details},
+        )
+        if not ok:
+            return f"{confirmation} I set it for now, but persistence is degraded ({details})."
+        return confirmation
+
 
     def _build_live_context(self, message: str) -> str:
         now_utc = datetime.now(UTC)
@@ -544,10 +828,16 @@ class MessageHandlers:
         if is_group:
             self.memory.update_context(group_key, f"{update.effective_user.full_name}: {message}", "user", max_messages=120)
 
-        for extracted in self._extract_memories_from_message(message):
+        extracted_memories = self._extract_memories_from_message(message)
+        for extracted in extracted_memories:
             self.memory.add_memory(str(user_id), extracted["text"], extracted["category"], extracted["importance"])
             if is_group:
                 self.memory.add_memory(group_key, extracted["text"], "group_signal", extracted["importance"])
+        if extracted_memories:
+            try:
+                self.personality_agent.adjust_trait(str(user_id), "emotional_depth", 1)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("Personality adaptation skipped: %s", exc)
 
         if is_group:
             await self._summarize_group_if_needed(chat_id)
@@ -557,6 +847,16 @@ class MessageHandlers:
             should_reply = self._message_mentions_bot(update)
 
         if not should_reply:
+            return
+
+        auto_schedule_reply = self._maybe_schedule_from_message(message, user_id)
+        if auto_schedule_reply:
+            self.memory.update_context(str(user_id), auto_schedule_reply, "assistant")
+            if is_group:
+                self.memory.update_context(group_key, f"HER: {auto_schedule_reply}", "assistant", max_messages=120)
+            if self._metrics:
+                self._metrics.record_interaction(str(user_id), message, auto_schedule_reply)
+            await self._reply(update, auto_schedule_reply)
             return
 
         try:

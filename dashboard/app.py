@@ -196,6 +196,7 @@ def get_metrics(redis_client):
             "logs": _safe_lrange(redis_client, "her:logs", 0, 399),
             "sandbox_executions": _safe_lrange(redis_client, "her:sandbox:executions", 0, 199),
             "scheduled_jobs": _safe_lrange(redis_client, "her:scheduler:jobs", 0, 199),
+            "decision_logs": _safe_lrange(redis_client, "her:decision:logs", 0, 499),
         }
     except Exception as exc:  # noqa: BLE001
         st.warning(f"Error fetching metrics: {exc}")
@@ -232,6 +233,20 @@ def get_runtime_capability_history(redis_client) -> list[dict[str, Any]]:
     except Exception as exc:  # noqa: BLE001
         st.warning(f"Error fetching capability history: {exc}")
         return []
+
+
+def get_scheduler_state(redis_client) -> dict[str, Any]:
+    if not redis_client:
+        return {}
+    try:
+        raw = redis_client.get("her:scheduler:state")
+        if not raw:
+            return {}
+        payload = json.loads(raw)
+        return payload if isinstance(payload, dict) else {}
+    except Exception as exc:  # noqa: BLE001
+        st.warning(f"Error fetching scheduler state: {exc}")
+        return {}
 
 
 def parse_events(events: list[str]) -> pd.DataFrame:
@@ -288,6 +303,27 @@ def parse_execs(execs: list[str]) -> pd.DataFrame:
     df = pd.DataFrame(rows)
     if not df.empty:
         df = df[df["timestamp"].notna()].sort_values("timestamp")
+    return df
+
+
+def parse_decisions(decision_rows: list[str]) -> pd.DataFrame:
+    rows: list[dict[str, Any]] = []
+    for raw in decision_rows:
+        payload = safe_json(raw)
+        ts = parse_ts(payload.get("timestamp"))
+        rows.append(
+            {
+                "timestamp": ts,
+                "event_type": str(payload.get("event_type", "")),
+                "source": str(payload.get("source", "")),
+                "user_id": str(payload.get("user_id", "")),
+                "summary": str(payload.get("summary", "")),
+                "details": json.dumps(payload.get("details", {}), ensure_ascii=True),
+            }
+        )
+    df = pd.DataFrame(rows)
+    if not df.empty:
+        df = df[df["timestamp"].notna()].sort_values("timestamp", ascending=False)
     return df
 
 
@@ -671,6 +707,7 @@ with st.sidebar:
             "Logs",
             "Executors",
             "Jobs",
+            "Decisions",
             "Metrics",
             "Memory",
             "System Health",
@@ -687,6 +724,7 @@ pg_conn = get_postgres_connection()
 metrics = get_metrics(redis_client)
 runtime_capabilities = get_runtime_capabilities(redis_client)
 capability_history = get_runtime_capability_history(redis_client)
+scheduler_state = get_scheduler_state(redis_client)
 recent_chats = get_recent_chats(redis_client, limit=200)
 short_memory = get_short_memory_stats(redis_client, recent_chats)
 memory_stats = get_memory_stats(pg_conn)
@@ -695,6 +733,7 @@ events_df = parse_events(metrics.get("events", []))
 logs_df = parse_logs(metrics.get("logs", []))
 exec_df = parse_execs(metrics.get("sandbox_executions", []))
 jobs_df = pd.DataFrame([safe_json(row) for row in metrics.get("scheduled_jobs", [])])
+decision_df = parse_decisions(metrics.get("decision_logs", []))
 
 if page == "Overview":
     st.title("Overview Dashboard")
@@ -843,6 +882,19 @@ elif page == "Executors":
 elif page == "Jobs":
     st.title("Scheduled Jobs")
 
+    st.subheader("Upcoming Jobs")
+    upcoming = scheduler_state.get("upcoming", []) if scheduler_state else []
+    if upcoming:
+        upcoming_df = pd.DataFrame(upcoming)
+        if "next_run" in upcoming_df.columns:
+            upcoming_df["next_run"] = upcoming_df["next_run"].apply(parse_ts)
+            upcoming_df = upcoming_df.sort_values("next_run")
+        st.dataframe(upcoming_df.head(100), use_container_width=True, hide_index=True)
+    else:
+        st.info("No upcoming scheduler state found. Key: `her:scheduler:state`")
+
+    st.markdown("---")
+    st.subheader("Execution History")
     if jobs_df.empty:
         st.info("No scheduled jobs executed yet. Jobs are logged to Redis under 'her:scheduler:jobs'.")
     else:
@@ -858,6 +910,15 @@ elif page == "Jobs":
                 .reset_index(name="count")
             )
             render_plotly_bar(success_df, "status", "count", "Scheduled Job Outcomes")
+
+elif page == "Decisions":
+    st.title("Decision Logs")
+    if decision_df.empty:
+        st.info("No decision logs yet. Events are stored under `her:decision:logs`.")
+    else:
+        st.dataframe(decision_df.head(300), use_container_width=True, hide_index=True)
+        count_df = decision_df["event_type"].value_counts().rename_axis("event_type").reset_index(name="count")
+        render_plotly_bar(count_df, "event_type", "count", "Decision Events by Type")
 
 elif page == "Metrics":
     st.title("Detailed Metrics")

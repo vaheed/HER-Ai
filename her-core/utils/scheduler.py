@@ -4,24 +4,26 @@ Supports cron-like scheduling for:
 - Hourly tasks
 - Daily tasks
 - Custom interval tasks
-- Twitter auto-actions
-- Memory reflection
-- Any configured periodic operations
+- Time-of-day reminders and workflow notifications
 """
+
+from __future__ import annotations
 
 import asyncio
 import json
 import logging
 import os
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from urllib.request import Request, urlopen
+from zoneinfo import ZoneInfo
 
 import yaml
 
 from utils.config_paths import resolve_config_file
+from utils.decision_log import DecisionLogger
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +36,7 @@ class TaskScheduler:
         self.running = False
         self._scheduler_task: asyncio.Task | None = None
         self._config_path: Path | None = None
+        self._decision_logger = DecisionLogger()
 
     async def start(self):
         """Start the scheduler."""
@@ -43,6 +46,9 @@ class TaskScheduler:
 
         self.running = True
         self._load_tasks()
+        self._restore_runtime_state()
+        self._recompute_all_next_runs(datetime.now(timezone.utc))
+        self._publish_scheduler_state()
         self._scheduler_task = asyncio.create_task(self._scheduler_loop())
         logger.info("✅ Task scheduler started with %s tasks", len(self.tasks))
 
@@ -55,6 +61,8 @@ class TaskScheduler:
                 await self._scheduler_task
             except asyncio.CancelledError:
                 pass
+        self._persist_runtime_state()
+        self._publish_scheduler_state()
         logger.info("Task scheduler stopped")
 
     def _load_tasks(self):
@@ -71,12 +79,63 @@ class TaskScheduler:
                 config = yaml.safe_load(f) or {}
 
             raw_tasks = config.get("tasks", [])
-            self.tasks = [task for task in raw_tasks if isinstance(task, dict)]
+            valid_tasks: list[dict[str, Any]] = []
+            for raw_task in raw_tasks:
+                normalized = self._normalize_task(raw_task)
+                if normalized is None:
+                    continue
+                valid_tasks.append(normalized)
+            self.tasks = valid_tasks
             logger.info("Loaded %s scheduled tasks", len(self.tasks))
 
         except Exception as exc:  # noqa: BLE001
             logger.error("Failed to load scheduler config: %s", exc)
             self.tasks = []
+
+    def _normalize_task(self, task: Any) -> dict[str, Any] | None:
+        if not isinstance(task, dict):
+            logger.warning("Skipping invalid scheduler task entry: expected object")
+            return None
+
+        name = str(task.get("name", "")).strip()
+        interval = str(task.get("interval", "")).strip().lower()
+        task_type = str(task.get("type", "custom")).strip().lower() or "custom"
+
+        if not name:
+            logger.warning("Skipping scheduler task with missing name")
+            return None
+        if not self.is_valid_interval(interval):
+            logger.warning("Skipping scheduler task '%s': invalid interval '%s'", name, interval)
+            return None
+
+        normalized = dict(task)
+        normalized["name"] = name
+        normalized["interval"] = interval
+        normalized["type"] = task_type
+        normalized["enabled"] = bool(task.get("enabled", True))
+
+        at_value = str(task.get("at", "")).strip()
+        if at_value and not self._is_valid_clock_time(at_value):
+            logger.warning("Task '%s' has invalid 'at' format '%s' (expected HH:MM)", name, at_value)
+            normalized.pop("at", None)
+
+        tz_name = str(task.get("timezone", os.getenv("TZ", "UTC"))).strip() or "UTC"
+        try:
+            ZoneInfo(tz_name)
+            normalized["timezone"] = tz_name
+        except Exception:  # noqa: BLE001
+            logger.warning("Task '%s' timezone '%s' invalid, using UTC", name, tz_name)
+            normalized["timezone"] = "UTC"
+
+        weekdays = task.get("weekdays")
+        if weekdays is not None:
+            normalized_weekdays = self._normalize_weekdays(weekdays)
+            if normalized_weekdays:
+                normalized["weekdays"] = normalized_weekdays
+            else:
+                normalized.pop("weekdays", None)
+
+        return normalized
 
     @staticmethod
     def is_valid_interval(interval: str) -> bool:
@@ -89,6 +148,49 @@ class TaskScheduler:
                 return False
             return parts[2] in {"minutes", "hours", "days"}
         return False
+
+    @staticmethod
+    def _is_valid_clock_time(value: str) -> bool:
+        parts = value.split(":")
+        if len(parts) != 2:
+            return False
+        if not parts[0].isdigit() or not parts[1].isdigit():
+            return False
+        hour, minute = int(parts[0]), int(parts[1])
+        return 0 <= hour <= 23 and 0 <= minute <= 59
+
+    @staticmethod
+    def _normalize_weekdays(weekdays: Any) -> list[int]:
+        if not isinstance(weekdays, list):
+            return []
+
+        mapping = {
+            "mon": 0,
+            "monday": 0,
+            "tue": 1,
+            "tuesday": 1,
+            "wed": 2,
+            "wednesday": 2,
+            "thu": 3,
+            "thursday": 3,
+            "fri": 4,
+            "friday": 4,
+            "sat": 5,
+            "saturday": 5,
+            "sun": 6,
+            "sunday": 6,
+        }
+
+        normalized: set[int] = set()
+        for item in weekdays:
+            if isinstance(item, int) and 0 <= item <= 6:
+                normalized.add(item)
+                continue
+            text = str(item).strip().lower()
+            if text in mapping:
+                normalized.add(mapping[text])
+
+        return sorted(normalized)
 
     def _serializable_tasks(self) -> list[dict[str, Any]]:
         """Return task list safe for config persistence."""
@@ -106,26 +208,43 @@ class TaskScheduler:
             with path.open("w", encoding="utf-8") as handle:
                 yaml.safe_dump(payload, handle, sort_keys=False)
             self._config_path = path
+            self._publish_scheduler_state()
             return True, f"saved to {path}"
         except Exception as exc:  # noqa: BLE001
             logger.error("Failed to persist scheduler tasks to %s: %s", path, exc)
+            if "Permission denied" in str(exc):
+                logger.warning(
+                    "Scheduler config path is not writable (%s). "
+                    "Set HER_CONFIG_DIR to writable path or use writable /app/config mount.",
+                    path,
+                )
             return False, f"failed to write {path}: {exc}"
 
     async def _scheduler_loop(self):
         """Main scheduler loop."""
         while self.running:
             try:
-                now = datetime.now()
+                now = datetime.now(timezone.utc)
+                dirty = False
                 for task in self.tasks:
                     if not task.get("enabled", True):
                         continue
 
-                    last_run = task.get("_last_run")
-                    interval = task.get("interval")
-
-                    if self._should_run(now, last_run, interval):
+                    if self._should_run(now, task):
                         await self._execute_task(task)
                         task["_last_run"] = now.isoformat()
+                        dirty = True
+
+                    next_run = self._compute_next_run(now, task)
+                    if next_run:
+                        serialized = next_run.isoformat()
+                        if task.get("_next_run") != serialized:
+                            task["_next_run"] = serialized
+                            dirty = True
+
+                if dirty:
+                    self._persist_runtime_state()
+                    self._publish_scheduler_state()
 
                 # Check every minute
                 await asyncio.sleep(60)
@@ -136,40 +255,122 @@ class TaskScheduler:
                 logger.exception("Error in scheduler loop: %s", exc)
                 await asyncio.sleep(60)
 
-    def _should_run(self, now: datetime, last_run: str | None, interval: str) -> bool:
-        """Check if task should run based on interval."""
-        if not interval:
-            return False
-
-        if not last_run:
-            return True
-
+    @staticmethod
+    def _parse_iso_timestamp(value: Any) -> datetime | None:
+        if not value:
+            return None
         try:
-            last_run_dt = datetime.fromisoformat(last_run)
+            dt = datetime.fromisoformat(str(value))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt.astimezone(timezone.utc)
         except (ValueError, TypeError):
-            return True
+            return None
 
+    @staticmethod
+    def _parse_interval_delta(interval: str) -> timedelta | None:
         if interval == "hourly":
-            return (now - last_run_dt) >= timedelta(hours=1)
-        elif interval == "daily":
-            return (now - last_run_dt) >= timedelta(days=1)
-        elif interval == "weekly":
-            return (now - last_run_dt) >= timedelta(weeks=1)
-        elif interval.startswith("every_"):
-            # Parse "every_N_minutes", "every_N_hours", etc.
+            return timedelta(hours=1)
+        if interval == "daily":
+            return timedelta(days=1)
+        if interval == "weekly":
+            return timedelta(weeks=1)
+        if interval.startswith("every_"):
             parts = interval.split("_")
             if len(parts) == 3 and parts[1].isdigit():
                 value = int(parts[1])
                 unit = parts[2]
-
                 if unit == "minutes":
-                    return (now - last_run_dt) >= timedelta(minutes=value)
-                elif unit == "hours":
-                    return (now - last_run_dt) >= timedelta(hours=value)
-                elif unit == "days":
-                    return (now - last_run_dt) >= timedelta(days=value)
+                    return timedelta(minutes=value)
+                if unit == "hours":
+                    return timedelta(hours=value)
+                if unit == "days":
+                    return timedelta(days=value)
+        return None
 
-        return False
+    @staticmethod
+    def _parse_clock_time(value: str) -> tuple[int, int] | None:
+        if not TaskScheduler._is_valid_clock_time(value):
+            return None
+        hour_s, minute_s = value.split(":", 1)
+        return int(hour_s), int(minute_s)
+
+    def _compute_next_time_based_run(
+        self,
+        now_utc: datetime,
+        task: dict[str, Any],
+        interval: str,
+        last_run_dt: datetime | None,
+    ) -> datetime | None:
+        at_value = str(task.get("at", "")).strip()
+        parsed_clock = self._parse_clock_time(at_value)
+        if parsed_clock is None:
+            return None
+
+        tz_name = str(task.get("timezone", os.getenv("TZ", "UTC"))).strip() or "UTC"
+        tz = ZoneInfo(tz_name)
+        local_now = now_utc.astimezone(tz)
+        hour, minute = parsed_clock
+        candidate_local = local_now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+
+        weekdays = self._normalize_weekdays(task.get("weekdays", []))
+
+        if interval == "daily":
+            if candidate_local <= local_now:
+                candidate_local += timedelta(days=1)
+            if weekdays:
+                while candidate_local.weekday() not in weekdays:
+                    candidate_local += timedelta(days=1)
+            return candidate_local.astimezone(timezone.utc)
+
+        if interval == "weekly":
+            if weekdays:
+                if candidate_local <= local_now:
+                    candidate_local += timedelta(days=1)
+                while candidate_local.weekday() not in weekdays:
+                    candidate_local += timedelta(days=1)
+                return candidate_local.astimezone(timezone.utc)
+
+            anchor_weekday = local_now.weekday()
+            if last_run_dt is not None:
+                anchor_weekday = last_run_dt.astimezone(tz).weekday()
+
+            # Align candidate with chosen weekday, then ensure it's in the future.
+            day_shift = (anchor_weekday - candidate_local.weekday()) % 7
+            candidate_local += timedelta(days=day_shift)
+            if candidate_local <= local_now:
+                candidate_local += timedelta(days=7)
+            return candidate_local.astimezone(timezone.utc)
+
+        return None
+
+    def _compute_next_run(self, now_utc: datetime, task: dict[str, Any]) -> datetime | None:
+        interval = str(task.get("interval", ""))
+        last_run_dt = self._parse_iso_timestamp(task.get("_last_run"))
+
+        time_based_next = self._compute_next_time_based_run(now_utc, task, interval, last_run_dt)
+        if time_based_next is not None:
+            return time_based_next
+
+        delta = self._parse_interval_delta(interval)
+        if delta is None:
+            return None
+
+        if last_run_dt is None:
+            return now_utc
+        return last_run_dt + delta
+
+    def _should_run(self, now_utc: datetime, task: dict[str, Any]) -> bool:
+        next_run_dt = self._parse_iso_timestamp(task.get("_next_run"))
+        if next_run_dt is None:
+            next_run_dt = self._compute_next_run(now_utc, task)
+            if next_run_dt is not None:
+                task["_next_run"] = next_run_dt.isoformat()
+
+        if next_run_dt is None:
+            return False
+
+        return now_utc >= next_run_dt
 
     async def _execute_task(self, task: dict[str, Any]):
         """Execute a scheduled task."""
@@ -198,6 +399,11 @@ class TaskScheduler:
             elif task_type == "workflow":
                 result = await self._execute_workflow_task(task)
                 success = True
+            elif task_type == "reminder":
+                result = await self._execute_reminder_task(task)
+                success = result.startswith("Reminder sent")
+                if not success:
+                    error = result
             else:
                 error = f"Unknown task type: {task_type}"
                 logger.warning(error)
@@ -207,7 +413,20 @@ class TaskScheduler:
             logger.exception("Task execution failed: %s", exc)
 
         execution_time = time.time() - start_time
-        self._log_job_execution(task_name, task_type, success, result, error, execution_time, task.get("interval", ""))
+        next_run = task.get("_next_run", "")
+        self._log_job_execution(task_name, task_type, success, result, error, execution_time, str(next_run))
+        self._decision_logger.log(
+            event_type="scheduler_execution",
+            summary=f"Task '{task_name}' executed ({'success' if success else 'failed'})",
+            source="scheduler",
+            details={
+                "task": task_name,
+                "type": task_type,
+                "success": success,
+                "error": error,
+                "next_run": str(next_run),
+            },
+        )
 
     def _log_job_execution(
         self,
@@ -217,13 +436,11 @@ class TaskScheduler:
         result: str,
         error: str,
         execution_time: float,
-        interval: str,
+        next_run: str,
     ):
         """Log job execution to Redis."""
         try:
             import redis
-            import json
-            from datetime import datetime, timedelta, timezone
 
             redis_host = os.getenv("REDIS_HOST", "redis")
             redis_port = int(os.getenv("REDIS_PORT", "6379"))
@@ -236,17 +453,7 @@ class TaskScheduler:
                 decode_responses=True,
             )
 
-            # Calculate next run time
             now = datetime.now(timezone.utc)
-            if interval == "hourly":
-                next_run = (now + timedelta(hours=1)).isoformat()
-            elif interval == "daily":
-                next_run = (now + timedelta(days=1)).isoformat()
-            elif interval == "weekly":
-                next_run = (now + timedelta(weeks=1)).isoformat()
-            else:
-                next_run = ""
-
             payload = {
                 "timestamp": now.isoformat(),
                 "name": name,
@@ -272,23 +479,32 @@ class TaskScheduler:
             twitter_config = TwitterConfigTool()
             result = twitter_config._run(action="execute")
             logger.info("Twitter task result: %s", result)
+            return str(result)
 
         except Exception as exc:  # noqa: BLE001
             logger.error("Twitter task failed: %s", exc)
+            return f"Twitter task failed: {exc}"
 
     async def _execute_reflection_task(self, task: dict[str, Any]):
         """Execute memory reflection task."""
         logger.info("Memory reflection task executed")
-        # This would trigger the reflection agent
-        # Implementation depends on how reflection is integrated
 
     async def _execute_custom_task(self, task: dict[str, Any]):
         """Execute custom task."""
         command = task.get("command")
         if command:
             logger.info("Executing custom command: %s", command)
-            # Could execute in sandbox or via subprocess
-            # For now, just log it
+
+    async def _execute_reminder_task(self, task: dict[str, Any]) -> str:
+        user_id = self._resolve_notify_user_id(task)
+        if user_id is None:
+            return "Reminder failed: notify_user_id missing"
+
+        message = str(task.get("message", "Reminder"))
+        sent = await self._send_telegram_notification(user_id, message)
+        if sent:
+            return f"Reminder sent to {user_id}"
+        return f"Reminder failed for {user_id}"
 
     async def _send_telegram_notification(self, chat_id: int, text: str) -> bool:
         """Send scheduler notifications via Telegram Bot API."""
@@ -473,6 +689,102 @@ class TaskScheduler:
             outputs.append(outcome)
         return "; ".join(outputs) if outputs else "workflow completed"
 
+    def _redis_client(self):
+        try:
+            import redis
+
+            return redis.Redis(
+                host=os.getenv("REDIS_HOST", "redis"),
+                port=int(os.getenv("REDIS_PORT", "6379")),
+                password=os.getenv("REDIS_PASSWORD", ""),
+                decode_responses=True,
+            )
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _persist_runtime_state(self) -> None:
+        client = self._redis_client()
+        if client is None:
+            return
+        try:
+            state = {
+                str(task.get("name", "")): {
+                    "last_run": task.get("_last_run", ""),
+                    "next_run": task.get("_next_run", ""),
+                }
+                for task in self.tasks
+                if task.get("name")
+            }
+            client.set("her:scheduler:runtime_state", json.dumps(state))
+        except Exception:  # noqa: BLE001
+            return
+
+    def _restore_runtime_state(self) -> None:
+        client = self._redis_client()
+        if client is None:
+            return
+        try:
+            raw = client.get("her:scheduler:runtime_state")
+            if not raw:
+                return
+            state = json.loads(raw)
+            if not isinstance(state, dict):
+                return
+            for task in self.tasks:
+                name = str(task.get("name", "")).strip()
+                persisted = state.get(name, {}) if name else {}
+                if not isinstance(persisted, dict):
+                    continue
+                last_run = str(persisted.get("last_run", "")).strip()
+                next_run = str(persisted.get("next_run", "")).strip()
+                if last_run:
+                    task["_last_run"] = last_run
+                if next_run:
+                    task["_next_run"] = next_run
+        except Exception:  # noqa: BLE001
+            return
+
+    def _recompute_all_next_runs(self, now_utc: datetime) -> None:
+        for task in self.tasks:
+            next_run = self._compute_next_run(now_utc, task)
+            if next_run:
+                task["_next_run"] = next_run.isoformat()
+
+    def get_upcoming_jobs(self, limit: int = 20) -> list[dict[str, Any]]:
+        upcoming: list[dict[str, Any]] = []
+        for task in self.tasks:
+            if not task.get("enabled", True):
+                continue
+            next_run = str(task.get("_next_run", "")).strip()
+            upcoming.append(
+                {
+                    "name": task.get("name", "unknown"),
+                    "type": task.get("type", "custom"),
+                    "interval": task.get("interval", ""),
+                    "timezone": task.get("timezone", os.getenv("TZ", "UTC")),
+                    "at": task.get("at", ""),
+                    "next_run": next_run,
+                    "enabled": bool(task.get("enabled", True)),
+                }
+            )
+
+        upcoming.sort(key=lambda item: str(item.get("next_run", "")))
+        return upcoming[: max(1, limit)]
+
+    def _publish_scheduler_state(self) -> None:
+        client = self._redis_client()
+        if client is None:
+            return
+        try:
+            payload = {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "task_count": len(self.tasks),
+                "upcoming": self.get_upcoming_jobs(limit=100),
+            }
+            client.set("her:scheduler:state", json.dumps(payload))
+        except Exception:  # noqa: BLE001
+            return
+
     def add_task(
         self,
         name: str,
@@ -482,6 +794,7 @@ class TaskScheduler:
         **kwargs: Any,
     ):
         """Add a task to the scheduler."""
+        interval = interval.lower().strip()
         if not self.is_valid_interval(interval):
             raise ValueError(
                 "Invalid interval. Use hourly|daily|weekly|every_<N>_minutes|every_<N>_hours|every_<N>_days"
@@ -493,11 +806,18 @@ class TaskScheduler:
             "enabled": enabled,
             **kwargs,
         }
-        self.tasks.append(task)
+        normalized = self._normalize_task(task)
+        if normalized is None:
+            raise ValueError("Task configuration is invalid")
+        self.tasks.append(normalized)
+        self._recompute_all_next_runs(datetime.now(timezone.utc))
+        self._persist_runtime_state()
+        self._publish_scheduler_state()
         logger.info("Added scheduled task: %s (interval: %s)", name, interval)
 
     def set_task_interval(self, name: str, interval: str) -> bool:
         """Update interval for an existing task."""
+        interval = interval.lower().strip()
         if not self.is_valid_interval(interval):
             raise ValueError(
                 "Invalid interval. Use hourly|daily|weekly|every_<N>_minutes|every_<N>_hours|every_<N>_days"
@@ -506,6 +826,10 @@ class TaskScheduler:
             if task.get("name") == name:
                 task["interval"] = interval
                 task.pop("_last_run", None)
+                task.pop("_next_run", None)
+                self._recompute_all_next_runs(datetime.now(timezone.utc))
+                self._persist_runtime_state()
+                self._publish_scheduler_state()
                 return True
         return False
 
@@ -516,6 +840,10 @@ class TaskScheduler:
                 task["enabled"] = enabled
                 if enabled:
                     task.pop("_last_run", None)
+                task.pop("_next_run", None)
+                self._recompute_all_next_runs(datetime.now(timezone.utc))
+                self._persist_runtime_state()
+                self._publish_scheduler_state()
                 return True
         return False
 
@@ -524,7 +852,13 @@ class TaskScheduler:
         for task in self.tasks:
             if task.get("name") == name:
                 await self._execute_task(task)
-                task["_last_run"] = datetime.now().isoformat()
+                now = datetime.now(timezone.utc)
+                task["_last_run"] = now.isoformat()
+                next_run = self._compute_next_run(now, task)
+                if next_run:
+                    task["_next_run"] = next_run.isoformat()
+                self._persist_runtime_state()
+                self._publish_scheduler_state()
                 return True, "executed"
         return False, "task not found"
 

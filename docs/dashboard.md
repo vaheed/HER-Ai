@@ -35,9 +35,15 @@ Charts use Plotly for responsive, interactive visuals (zoom, pan, hover, legend 
 
 ### ⏰ Jobs Page
 - **Scheduled Job History**: View all scheduled task executions
+- **Upcoming Jobs**: Live upcoming schedule from `her:scheduler:state`
 - **Job Details**: Name, type, interval, execution time, results
 - **Job Configuration**: View and manage scheduled tasks
 - **Next Run Times**: See when jobs will execute next
+
+### 🧾 Decisions Page
+- **Decision Audit Trail**: View runtime decisions and actions from Redis key `her:decision:logs`
+- **Transparency Metrics**: Breakdown of decision event types (scheduler, capability probes, reply generation)
+- **Debugging Support**: Correlate decisions with logs and job outcomes
 
 ### 📈 Metrics Page
 - **Token Usage Over Time**: Visual chart of token consumption
@@ -99,6 +105,8 @@ TZ=UTC
 - `her:logs` - System logs (last 200)
 - `her:sandbox:executions` - Sandbox execution history (last 100)
 - `her:scheduler:jobs` - Scheduled job history (last 100)
+- `her:scheduler:state` - Scheduler runtime state and upcoming jobs
+- `her:decision:logs` - Runtime decision log feed (last 500)
 - `her:runtime:capabilities` - Latest startup capability snapshot (internet/sandbox/MCP)
 - `her:runtime:capabilities:history` - Capability snapshot history (last 100)
 

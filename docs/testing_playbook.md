@@ -146,6 +146,17 @@ Expected:
 - Task is created and persisted.
 - Task executes as a chain without introducing new hardcoded task logic.
 
+Run (time-based reminder):
+
+```text
+/schedule add hydrate reminder daily at=09:00 timezone=UTC message='Hydration reminder: drink water now.'
+```
+
+Expected:
+- Reminder task is created with `at` and `timezone`.
+- `/schedule list` shows a computed `next=` timestamp.
+- Dashboard Jobs page shows the task under Upcoming Jobs.
+
 ---
 
 ## 5) Validate public-mode throttling
@@ -206,6 +217,8 @@ Open:
 Expected:
 - Dashboard loads.
 - Core service health/metrics are visible.
+- Jobs page includes Upcoming Jobs (from `her:scheduler:state`).
+- Decisions page includes runtime decision events (`her:decision:logs`).
 
 ---
 

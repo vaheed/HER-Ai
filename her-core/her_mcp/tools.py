@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import socket
+from pathlib import Path
 import subprocess
 from typing import Any
 from urllib.parse import quote_plus
@@ -19,6 +20,7 @@ from her_mcp.sandbox_tools import (
     SandboxTestTool,
     SandboxWebTool,
 )
+from utils.decision_log import DecisionLogger
 
 try:
     from her_mcp.twitter_tools import TwitterConfigTool, TwitterTool
@@ -123,6 +125,7 @@ class MCPToolsIntegration:
     def __init__(self, mcp_manager: MCPManager):
         self.mcp = mcp_manager
         self.sandbox_container = os.getenv("SANDBOX_CONTAINER_NAME", "her-sandbox")
+        self.decision_logger = DecisionLogger()
         self.capability_status: dict[str, dict[str, str | bool]] = {
             "internet": {"available": False, "reason": "not checked"},
             "sandbox": {"available": False, "reason": "not checked"},
@@ -148,6 +151,12 @@ class MCPToolsIntegration:
         self.capability_status["internet"] = {"available": internet_ok, "reason": internet_reason}
         if not internet_ok:
             logger.warning("Internet capability degraded: %s", internet_reason)
+        self.decision_logger.log(
+            event_type="capability_probe",
+            summary=f"Internet capability {'available' if internet_ok else 'degraded'}",
+            source="mcp_tools",
+            details={"capability": "internet", "available": internet_ok, "reason": internet_reason},
+        )
 
         if status.get("filesystem", {}).get("status") == "running":
             filesystem_tools = [
@@ -190,6 +199,20 @@ class MCPToolsIntegration:
         # All sandbox execution runs in the isolated 'her-sandbox' container via Docker exec
         try:
             import docker
+            docker_sock = Path("/var/run/docker.sock")
+            if docker_sock.exists():
+                try:
+                    sock_gid = docker_sock.stat().st_gid
+                    process_groups = os.getgroups()
+                    if sock_gid not in process_groups:
+                        logger.warning(
+                            "docker.sock group mismatch: socket gid=%s, process groups=%s, DOCKER_GID=%s",
+                            sock_gid,
+                            process_groups,
+                            os.getenv("DOCKER_GID", "(unset)"),
+                        )
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("docker.sock preflight check failed: %s", exc)
             # Check if Docker is available and sandbox container exists
             try:
                 client = docker.from_env()
@@ -237,11 +260,18 @@ class MCPToolsIntegration:
                 )
             except Exception as exc:  # noqa: BLE001
                 message = str(exc)
-                if "Permission denied" in message and "/var/run/docker.sock" in message:
+                if "Permission denied" in message:
+                    detected_gid = None
+                    try:
+                        detected_gid = Path("/var/run/docker.sock").stat().st_gid
+                    except Exception:  # noqa: BLE001
+                        pass
                     message = (
-                        f"{message}. Set DOCKER_GID to host docker.sock group id "
-                        "(e.g., stat -c '%g' /var/run/docker.sock) and restart compose."
+                        f"{message}. Set DOCKER_GID to host docker.sock group id and restart compose. "
+                        f"Linux: stat -c '%g' /var/run/docker.sock | macOS: stat -f '%g' /var/run/docker.sock"
                     )
+                    if detected_gid is not None:
+                        message += f" (detected gid: {detected_gid})"
                 self.capability_status["sandbox"] = {
                     "available": False,
                     "reason": f"docker sandbox lookup failed: {message}",
@@ -259,6 +289,19 @@ class MCPToolsIntegration:
                 "reason": f"docker client unavailable: {exc}",
             }
             logger.warning("Docker not available, skipping sandbox tools: %s", exc)
+        self.decision_logger.log(
+            event_type="capability_probe",
+            summary=(
+                "Sandbox capability "
+                f"{'available' if bool((self.capability_status.get('sandbox') or {}).get('available')) else 'degraded'}"
+            ),
+            source="mcp_tools",
+            details={
+                "capability": "sandbox",
+                "available": bool((self.capability_status.get("sandbox") or {}).get("available")),
+                "reason": str((self.capability_status.get("sandbox") or {}).get("reason", "")),
+            },
+        )
 
         if self.mcp.get_server_status().get("puppeteer", {}).get("status") == "running":
             browser_tool = MCPTool(

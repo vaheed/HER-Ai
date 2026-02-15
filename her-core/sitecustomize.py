@@ -14,3 +14,13 @@ warnings.filterwarnings(
     category=UserWarning,
     module=r"pydantic\._internal\._generate_schema",
 )
+
+# langchain-openai 0.0.x still calls ``dict()`` on Pydantic models in a few
+# response adapters. Keep this specific warning out of runtime logs until
+# upstream migration to ``model_dump()`` is fully complete.
+warnings.filterwarnings(
+    "ignore",
+    message=r"The `dict` method is deprecated; use `model_dump` instead.*",
+    category=DeprecationWarning,
+    module=r"langchain_openai\.chat_models\.base",
+)

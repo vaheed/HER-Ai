@@ -182,6 +182,7 @@ REDIS_PASSWORD=redis_secure_password
 MCP_CONFIG_PATH=mcp_servers.yaml
 MCP_SERVER_START_TIMEOUT_SECONDS=60
 SANDBOX_CONTAINER_NAME=her-sandbox
+HER_CONFIG_DIR=
 DOCKER_GID=998
 TZ=UTC
 ```
@@ -200,8 +201,11 @@ Configuration files are located in `config/`:
 > **📖 For detailed configuration options**, see [docs/architecture.md](docs/architecture.md#-configuration-management)
 >
 > Runtime note: inside the container, when `/app/config` is read-only, entrypoint automatically falls back to `/app/config.defaults` via `HER_CONFIG_DIR` so startup continues with valid defaults.
+> If you want runtime edits (`/schedule add`, config writes), mount `/app/config` as writable or set `HER_CONFIG_DIR` to a writable path.
 
 Set `MCP_CONFIG_PATH=mcp_servers.local.yaml` if you want the no-key local MCP profile.
+Set `DOCKER_GID` to match your Docker socket group so sandbox tools can access Docker:
+Linux `stat -c '%g' /var/run/docker.sock` | macOS `stat -f '%g' /var/run/docker.sock`.
 
 ## 🧪 Testing
 

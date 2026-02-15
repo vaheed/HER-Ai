@@ -176,6 +176,10 @@ def test_scheduler_supports_runtime_updates_and_persistence() -> None:
     assert 'if "when" in step' in source
     assert 'if action == "set_state"' in source
     assert "def _send_telegram_notification" in source
+    assert 'task_type == "reminder"' in source
+    assert "def get_upcoming_jobs" in source
+    assert "her:scheduler:state" in source
+    assert 'task.get("at"' in source
 
 
 def test_mcp_profile_path_is_configurable_via_env() -> None:
@@ -185,6 +189,7 @@ def test_mcp_profile_path_is_configurable_via_env() -> None:
     assert 'os.getenv("MCP_CONFIG_PATH", "mcp_servers.yaml")' in main_source
     assert "MCP_CONFIG_PATH=mcp_servers.yaml" in env_example
     assert "SANDBOX_CONTAINER_NAME=her-sandbox" in env_example
+    assert "HER_CONFIG_DIR=" in env_example
 
 
 def test_telegram_registers_schedule_admin_command() -> None:
@@ -204,6 +209,9 @@ def test_dashboard_handles_mem0_schema_and_recent_chats() -> None:
     assert "conn.autocommit = True" in source
     assert "payload->'metadata'->>'category'" in source
     assert 'scan_iter(match="her:context:*"' in source
+    assert "her:scheduler:state" in source
+    assert "her:decision:logs" in source
+    assert "Upcoming Jobs" in source
 
 
 def test_timezone_is_configured_project_wide() -> None:
@@ -231,6 +239,13 @@ def test_sandbox_container_emits_startup_ready_log() -> None:
     assert "tail -f /dev/null" in source
 
 
+def test_sitecustomize_filters_known_pydantic_transition_warnings() -> None:
+    source = Path("her-core/sitecustomize.py").read_text()
+    assert "CrewAgentExecutor" in source
+    assert "model_dump" in source
+    assert r"langchain_openai\.chat_models\.base" in source
+
+
 def test_runtime_capability_degradation_is_logged_and_published() -> None:
     main_source = Path("her-core/main.py").read_text()
     tools_source = Path("her-core/her_mcp/tools.py").read_text()
@@ -241,6 +256,7 @@ def test_runtime_capability_degradation_is_logged_and_published() -> None:
     assert "_log_degraded_capabilities" in main_source
     assert "_probe_internet_access" in tools_source
     assert "self.capability_status" in tools_source
+    assert "DecisionLogger" in tools_source
     assert "get_runtime_capabilities" in dashboard_source
     assert "Runtime Capability Snapshot" in dashboard_source
 

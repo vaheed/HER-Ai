@@ -2,6 +2,7 @@ import logging
 import os
 from datetime import UTC, datetime
 import json
+import re
 from typing import Any
 from urllib.error import URLError
 from urllib.request import urlopen
@@ -16,11 +17,13 @@ from her_mcp.tools import CurlWebSearchTool
 from her_telegram.keyboards import get_admin_menu, get_personality_adjustment
 from her_telegram.rate_limiter import RateLimiter
 from memory.mem0_client import HERMemory
+from utils.decision_log import DecisionLogger
 from utils.llm_factory import build_llm
 from utils.metrics import HERMetrics
 from utils.scheduler import TaskScheduler
 
 logger = logging.getLogger(__name__)
+_INTERNET_DENIAL_PATTERN = re.compile(r"\b(no|not|cannot|can't)\b.*\binternet\b", re.IGNORECASE)
 
 
 class MessageHandlers:
@@ -54,6 +57,7 @@ class MessageHandlers:
         self.bot_username: str | None = None
         self._llm = build_llm()
         self._web_search_tool = CurlWebSearchTool()
+        self._decision_logger = DecisionLogger()
         self._metrics: HERMetrics | None = None
         try:
             self._metrics = HERMetrics(
@@ -163,12 +167,18 @@ class MessageHandlers:
                 task_type = task.get("type", "custom")
                 interval = task.get("interval", "unknown")
                 enabled = "on" if task.get("enabled", True) else "off"
-                lines.append(f"- {name} | type={task_type} | interval={interval} | enabled={enabled}")
+                next_run = task.get("_next_run", "pending")
+                at_value = task.get("at")
+                suffix = f" | at={at_value}" if at_value else ""
+                lines.append(
+                    f"- {name} | type={task_type} | interval={interval} | enabled={enabled} | next={next_run}{suffix}"
+                )
             lines.append("")
             lines.append("Use: /schedule set <task> <interval>")
             lines.append("Use: /schedule enable <task> | /schedule disable <task>")
             lines.append("Use: /schedule run <task>")
             lines.append("Use: /schedule add <name> <type> <interval> [key=value ...]")
+            lines.append("Reminder example: /schedule add stretch reminder daily at=09:00 timezone=UTC message='Take a short stretch break' notify_user_id=123456789")
             lines.append("Example: /schedule add any_rule workflow every_5_minutes source_url=https://example/api steps_json='[{\"action\":\"log\",\"message\":\"tick {now_utc}\"}]'")
             await self._reply(update, "\n".join(lines))
             return
@@ -189,6 +199,13 @@ class MessageHandlers:
                 return
             ok, details = self.scheduler.persist_tasks()
             status = "saved" if ok else "not saved"
+            self._decision_logger.log(
+                event_type="schedule_interval_update",
+                summary=f"Updated task '{task_name}' interval to '{interval}'",
+                user_id=str(update.effective_user.id),
+                source="telegram",
+                details={"task": task_name, "interval": interval, "saved": ok, "details": details},
+            )
             await self._reply(update, f"✅ Updated '{task_name}' interval to '{interval}' ({status}: {details})")
             return
 
@@ -205,6 +222,13 @@ class MessageHandlers:
             ok, details = self.scheduler.persist_tasks()
             state = "enabled" if enabled else "disabled"
             status = "saved" if ok else "not saved"
+            self._decision_logger.log(
+                event_type="schedule_toggle",
+                summary=f"Task '{task_name}' {state}",
+                user_id=str(update.effective_user.id),
+                source="telegram",
+                details={"task": task_name, "enabled": enabled, "saved": ok, "details": details},
+            )
             await self._reply(update, f"✅ Task '{task_name}' {state} ({status}: {details})")
             return
 
@@ -217,6 +241,13 @@ class MessageHandlers:
             if not ok:
                 await self._reply(update, f"❌ {details}: '{task_name}'")
                 return
+            self._decision_logger.log(
+                event_type="schedule_run_now",
+                summary=f"Ran task '{task_name}' immediately",
+                user_id=str(update.effective_user.id),
+                source="telegram",
+                details={"task": task_name},
+            )
             await self._reply(update, f"✅ Task '{task_name}' executed now")
             return
 
@@ -277,6 +308,13 @@ class MessageHandlers:
                 return
             ok, details = self.scheduler.persist_tasks()
             status = "saved" if ok else "not saved"
+            self._decision_logger.log(
+                event_type="schedule_add",
+                summary=f"Added schedule task '{name}'",
+                user_id=str(update.effective_user.id),
+                source="telegram",
+                details={"task": name, "type": task_type, "interval": interval, "saved": ok, "details": details},
+            )
             await self._reply(update, f"✅ Added task '{name}' ({status}: {details})")
             return
 
@@ -417,6 +455,13 @@ class MessageHandlers:
         now_utc = datetime.now(UTC)
         snippets = [f"Current UTC timestamp: {now_utc.isoformat()}"]
         lower_msg = message.lower()
+        caps = self._get_runtime_capabilities()
+        internet = (caps.get("capabilities", {}) or {}).get("internet", {}) if caps else {}
+        if internet:
+            snippets.append(
+                "Runtime internet capability: "
+                f"available={bool(internet.get('available'))}, reason={internet.get('reason', 'unknown')}"
+            )
 
         if any(token in lower_msg for token in {"bitcoin", "btc"}):
             usd_price = self._fetch_btc_price_usd()
@@ -431,8 +476,23 @@ class MessageHandlers:
             search_result = self._web_search_tool._run(message, max_results=3)
             if not search_result.lower().startswith("web search failed"):
                 snippets.append(f"Fresh web context:\n{search_result}")
+            else:
+                snippets.append(f"Web search attempt failed at runtime: {search_result}")
 
         return "\n".join(snippets)
+
+    def _get_runtime_capabilities(self) -> dict[str, Any]:
+        if not self._metrics:
+            return {}
+        try:
+            raw = self._metrics._client.get("her:runtime:capabilities")  # noqa: SLF001
+            if not raw:
+                return {}
+            payload = json.loads(raw)
+            return payload if isinstance(payload, dict) else {}
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Runtime capability lookup skipped: %s", exc)
+            return {}
 
     def _build_reply_prompt(
         self,
@@ -526,7 +586,14 @@ class MessageHandlers:
         try:
             response_obj = self._llm.invoke(
                 [
-                    SystemMessage(content="You are HER. Warm, empathetic, practical, concise."),
+                    SystemMessage(
+                        content=(
+                            "You are HER. Warm, empathetic, practical, concise. "
+                            "Be truthful about runtime capabilities. "
+                            "If live context indicates internet capability is available or includes fresh web results, "
+                            "do not claim you have no internet access."
+                        )
+                    ),
                     HumanMessage(content=prompt),
                 ]
             )
@@ -538,11 +605,25 @@ class MessageHandlers:
         if not response:
             response = "I am here with you. Tell me a little more and I will help."
 
+        caps = self._get_runtime_capabilities()
+        internet_available = bool(
+            ((caps.get("capabilities", {}) or {}).get("internet", {}) or {}).get("available")
+        )
+        if internet_available and _INTERNET_DENIAL_PATTERN.search(response):
+            response += "\n\nNote: runtime checks show internet is currently available."
+
         self.memory.update_context(str(user_id), response, "assistant")
         if is_group:
             self.memory.update_context(group_key, f"HER: {response}", "assistant", max_messages=120)
         if self._metrics:
             self._metrics.record_interaction(str(user_id), message, response)
+        self._decision_logger.log(
+            event_type="assistant_response",
+            summary="Generated assistant response",
+            user_id=str(user_id),
+            source="telegram",
+            details={"has_live_context": bool(live_context), "message_preview": message[:120]},
+        )
         await self._reply(update, response)
 
     async def handle_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):

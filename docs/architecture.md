@@ -1281,7 +1281,16 @@ SERPER_API_KEY=...
 LOG_LEVEL=INFO
 REFLECTION_INTERVAL=300  # seconds
 EVOLUTION_SPEED=medium   # slow, medium, fast
+HER_CONFIG_DIR=          # optional writable runtime config path inside container
+DOCKER_GID=998           # docker.sock group id for sandbox capability
 ```
+
+### Runtime Config + Scheduler Notes
+
+- If `/app/config` is read-only for `appuser`, startup automatically falls back to `/app/config.defaults` via `HER_CONFIG_DIR`.
+- Runtime scheduler edits (`/schedule add|set|enable|disable`) require a writable config path.
+- Scheduler publishes live upcoming jobs to Redis key `her:scheduler:state`; execution history is written to `her:scheduler:jobs`.
+- Runtime transparency events are written to `her:decision:logs` and Postgres table `decision_logs`.
 
 ### File Structure
 

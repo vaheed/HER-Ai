@@ -96,3 +96,12 @@ CREATE TABLE IF NOT EXISTS conversation_logs (
     metadata JSONB
 );
 
+CREATE TABLE IF NOT EXISTS decision_logs (
+    decision_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    timestamp TIMESTAMPTZ DEFAULT NOW(),
+    event_type TEXT NOT NULL,
+    user_id TEXT REFERENCES users(user_id),
+    source TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    details JSONB
+);

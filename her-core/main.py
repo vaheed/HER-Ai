@@ -2,9 +2,11 @@ import asyncio
 import json
 import logging
 import os
+import stat
 import threading
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
 from typing import Any
 import yaml
 from dotenv import load_dotenv
@@ -90,6 +92,7 @@ except Exception:
 
 async def async_main(config: AppConfig) -> None:
     logger.info("🚀 Starting HER AI Assistant...")
+    _log_runtime_config_selection()
 
     logger.info("Initializing memory system...")
     redis_store = RedisContextStore(
@@ -259,6 +262,53 @@ def _publish_runtime_capabilities(config: AppConfig, snapshot: dict[str, Any]) -
         redis_client.ltrim("her:runtime:capabilities:history", 0, 99)
     except Exception as exc:  # noqa: BLE001
         logger.warning("Failed to publish runtime capabilities to Redis: %s", exc)
+
+
+def _log_runtime_config_selection() -> None:
+    selected_agents_path = resolve_config_file("agents.yaml")
+    selected_config_dir = selected_agents_path.parent
+    runtime_dir = Path("/app/config")
+    defaults_dir = Path("/app/config.defaults")
+    env_dir = os.getenv("HER_CONFIG_DIR", "").strip()
+
+    logger.info(
+        "Runtime config selection: HER_CONFIG_DIR=%s | selected_dir=%s",
+        env_dir or "(unset)",
+        selected_config_dir,
+    )
+    if runtime_dir.exists():
+        runtime_writable = os.access(runtime_dir, os.W_OK)
+        logger.info("Runtime config dir check: path=%s writable=%s", runtime_dir, runtime_writable)
+        if not runtime_writable:
+            logger.warning(
+                "Runtime config volume is read-only for app user; defaults fallback is active (%s). "
+                "Set a writable /app/config mount or HER_CONFIG_DIR to a writable path if runtime edits are required.",
+                defaults_dir,
+            )
+
+    docker_sock = Path("/var/run/docker.sock")
+    if docker_sock.exists():
+        try:
+            sock_stat = docker_sock.stat()
+            sock_gid = sock_stat.st_gid
+            mode = stat.S_IMODE(sock_stat.st_mode)
+            process_groups = os.getgroups()
+            in_group = sock_gid in process_groups
+            logger.info(
+                "Docker socket check: gid=%s mode=%s process_groups=%s access=%s",
+                sock_gid,
+                oct(mode),
+                process_groups,
+                in_group,
+            )
+            if not in_group:
+                logger.warning(
+                    "Current process is not in docker.sock group (%s). Sandbox tools may be degraded. "
+                    "Set DOCKER_GID to the host socket group id and restart compose.",
+                    sock_gid,
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Failed docker.sock diagnostics: %s", exc)
 
 
 def main() -> None:

@@ -43,6 +43,8 @@ services:
     - BRAVE_API_KEY
     - MCP_CONFIG_PATH
     - SANDBOX_CONTAINER_NAME
+    - HER_CONFIG_DIR
+    - DOCKER_GID
     - TZ
     volumes:
     - her_config:/app/config

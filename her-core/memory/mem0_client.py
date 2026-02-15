@@ -90,12 +90,21 @@ class HERMemory:
         return {"model": config.embedding_model}
 
     def add_memory(self, user_id: str, text: str, category: str, importance: float) -> dict[str, Any]:
+        normalized_text = text
+        if isinstance(normalized_text, list):
+            normalized_text = " ".join(str(item) for item in normalized_text if item is not None)
+        normalized_text = str(normalized_text).strip()
+        if not normalized_text:
+            return {"status": "skipped", "reason": "empty_text"}
         try:
             return with_retry(
                 lambda: self._mem0.add(
-                    text,
+                    normalized_text,
                     user_id=user_id,
-                    metadata={"category": category, "importance": importance},
+                    metadata={
+                        "category": str(category or "general"),
+                        "importance": float(max(0.0, min(1.0, importance))),
+                    },
                 )
             )
         except RetryError as exc:

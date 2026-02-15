@@ -239,6 +239,9 @@ def test_dashboard_handles_mem0_schema_and_recent_chats() -> None:
     assert "her:scheduler:state" in source
     assert "her:decision:logs" in source
     assert "Upcoming Jobs" in source
+    assert "Behind The Chat: Reasoning / Tool Trace" in source
+    assert "\"tool_call\"" in source
+    assert "\"tool_result\"" in source
 
 
 def test_timezone_is_configured_project_wide() -> None:
@@ -284,6 +287,8 @@ def test_runtime_capability_degradation_is_logged_and_published() -> None:
     assert "_probe_internet_access" in tools_source
     assert "self.capability_status" in tools_source
     assert "DecisionLogger" in tools_source
+    assert "event_type=\"tool_call\"" in tools_source
+    assert "event_type=\"tool_result\"" in tools_source
     assert "get_runtime_capabilities" in dashboard_source
     assert "Runtime Capability Snapshot" in dashboard_source
 

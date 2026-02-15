@@ -21,6 +21,7 @@ from her_mcp.sandbox_tools import (
     SandboxWebTool,
 )
 from utils.decision_log import DecisionLogger
+from utils.decision_log import DecisionLogger
 
 try:
     from her_mcp.twitter_tools import TwitterConfigTool, TwitterTool
@@ -30,6 +31,7 @@ except ImportError:
     TwitterConfigTool = None
 
 logger = logging.getLogger(__name__)
+_decision_logger = DecisionLogger()
 
 
 class CurlWebSearchTool(BaseTool):
@@ -39,6 +41,12 @@ class CurlWebSearchTool(BaseTool):
     description: str = "Search the web for current information and sources without API keys."
 
     def _run(self, query: str, max_results: int = 5, **_: Any) -> str:
+        _decision_logger.log(
+            event_type="tool_call",
+            summary="web_search called",
+            source="mcp_tools",
+            details={"tool": "web_search", "query_preview": query[:160], "max_results": int(max_results)},
+        )
         if not query.strip():
             return "Web search failed: empty query"
 
@@ -114,7 +122,26 @@ class MCPTool(BaseTool):
                 call_args = {"input": args[0]}
 
         try:
-            return str(asyncio.run(self.mcp_manager.call_tool(self.server_name, self.tool_name, call_args)))
+            _decision_logger.log(
+                event_type="tool_call",
+                summary=f"MCP tool call {self.server_name}.{self.tool_name}",
+                source="mcp_tools",
+                details={
+                    "tool": f"{self.server_name}.{self.tool_name}",
+                    "args_preview": str(call_args)[:200],
+                },
+            )
+            result = str(asyncio.run(self.mcp_manager.call_tool(self.server_name, self.tool_name, call_args)))
+            _decision_logger.log(
+                event_type="tool_result",
+                summary=f"MCP tool result {self.server_name}.{self.tool_name}",
+                source="mcp_tools",
+                details={
+                    "tool": f"{self.server_name}.{self.tool_name}",
+                    "result_preview": result[:300],
+                },
+            )
+            return result
         except Exception as exc:  # noqa: BLE001
             return f"MCP tool '{self.tool_name}' failed: {exc}"
 

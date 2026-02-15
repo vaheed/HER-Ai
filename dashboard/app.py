@@ -851,6 +851,32 @@ elif page == "Recent Chats":
     else:
         st.info("No Redis context threads found yet.")
 
+    st.markdown("---")
+    st.subheader("Behind The Chat: Reasoning / Tool Trace")
+    if decision_df.empty:
+        st.info("No decision trace events yet.")
+    else:
+        trace = decision_df[
+            decision_df["event_type"].isin(
+                [
+                    "assistant_response",
+                    "tool_call",
+                    "tool_result",
+                    "natural_schedule_created",
+                    "reinforcement_event",
+                    "scheduler_execution",
+                ]
+            )
+        ].copy()
+        if trace.empty:
+            st.info("No reasoning/tool trace events yet.")
+        else:
+            st.dataframe(
+                trace[["timestamp", "event_type", "source", "user_id", "summary", "details"]].head(300),
+                use_container_width=True,
+                hide_index=True,
+            )
+
 elif page == "Executors":
     st.title("Sandbox Executors")
 

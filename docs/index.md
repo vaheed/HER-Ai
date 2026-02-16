@@ -11,6 +11,7 @@ Welcome to the documentation for **HER-Ai**, a personal AI assistant designed fo
 - [MCP Integration Guide](mcp_guide.md)
 - [Admin Dashboard](dashboard.md)
 - [Capability Testing Playbook](testing_playbook.md)
+- [Prompt Examples](examples.md)
 
 ## What is HER-Ai?
 HER-Ai is inspired by the movie **"HER"** and focuses on creating a warm, adaptive, and emotionally intelligent assistant. The system is composed of:

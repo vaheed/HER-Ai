@@ -221,12 +221,17 @@ def test_telegram_registers_schedule_admin_command() -> None:
     telegram_config = Path("config/telegram.yaml").read_text()
 
     assert 'CommandHandler("schedule", self.handlers.schedule_command)' in bot_source
+    assert 'CommandHandler("example", self.handlers.example_command)' in bot_source
     assert "/schedule" in handlers_source
+    assert "/example" in handlers_source
     assert "/schedule - Manage scheduled tasks" in telegram_config
+    assert "/example - Show ready-to-use examples" in telegram_config
     assert "[key=value ...]" in handlers_source
     assert "task_type == \"workflow\"" in handlers_source
     assert "def _maybe_schedule_from_message" in handlers_source
     assert "def _parse_schedule_request" in handlers_source
+    assert "def example_command" in handlers_source
+    assert "_EXAMPLE_PROMPTS" in handlers_source
     assert "Got it. I'll remind you" in handlers_source
     assert "ReinforcementEngine" in handlers_source
     assert "Adaptive communication profile" in handlers_source

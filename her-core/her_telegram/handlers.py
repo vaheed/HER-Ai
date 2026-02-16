@@ -44,6 +44,88 @@ _WEEKDAY_TO_INDEX = {
     "saturday": 5,
     "sunday": 6,
 }
+_EXAMPLE_PROMPTS: dict[str, list[str]] = {
+    "chat": [
+        "Help me plan my day in 3 priorities.",
+        "I feel overwhelmed. Give me a 5-minute reset plan.",
+        "Rewrite this text to sound more confident: ...",
+        "Summarize this message in two lines: ...",
+        "Role-play a tough conversation with my manager.",
+        "Give me 3 options to reply politely to this message: ...",
+    ],
+    "memory": [
+        "Remember that I prefer concise replies.",
+        "Remember my birthday is October 12.",
+        "What do you remember about my work goals?",
+        "Use my past preferences and suggest a better routine.",
+        "I changed my preference: morning workouts instead of evening.",
+        "Based on our previous chats, what patterns do you see?",
+    ],
+    "scheduling": [
+        "Remind me in 20min to call Ali.",
+        "Every day at 08:30 remind me to take vitamins.",
+        "After 2h remind me to send the report.",
+        "Next Monday at 9am remind me to review roadmap.",
+        "Every 3 days remind me to back up my laptop.",
+        "Every week remind me to review finances.",
+    ],
+    "automation": [
+        "Check BTC price every 2min and notify me when it rises 10% from current price.",
+        "Every hour check my API status page and notify me if it is down.",
+        "Track ETH price every 5 minutes and alert me if it drops 5% from baseline.",
+        "Monitor this JSON endpoint every 10 minutes and notify on error field.",
+        "Run a daily reminder workflow at 7am with a motivational message.",
+        "Every weekday at 09:00 notify me with top 3 priorities.",
+    ],
+    "web": [
+        "Search latest AI safety news and give 3 bullet points with links.",
+        "Find today's top crypto headlines with sources.",
+        "What is the live BTC price in USD right now?",
+        "Find the latest release notes for Docker Desktop.",
+        "Search best practices for PostgreSQL backup strategy.",
+        "Find a beginner guide for Rust ownership model.",
+    ],
+    "mcp_tools": [
+        "Use web search tool and compare 2 sources on this topic: ...",
+        "Check MCP status and tell me which capabilities are degraded.",
+        "Fetch this PDF URL and extract 5 key insights.",
+        "Use sequential thinking to break down this complex task: ...",
+        "Use filesystem tool to inspect runtime config differences.",
+        "Tell me what tools are currently available in runtime.",
+    ],
+    "sandbox": [
+        "Run DNS lookup for openai.com and explain the result.",
+        "Check SSL certificate expiry for github.com.",
+        "Test connectivity to api.github.com and report latency.",
+        "Run a simple port scan for a host and summarize open ports.",
+        "Check HTTP headers for https://example.com.",
+        "Do a traceroute-like analysis and summarize hops.",
+    ],
+    "admin": [
+        "/status",
+        "/mcp",
+        "/memories",
+        "/schedule list",
+        "/schedule run memory_reflection",
+        "/schedule add hydrate reminder daily at=09:00 timezone=UTC message='Drink water' notify_user_id=123456789",
+    ],
+    "personality": [
+        "Be more concise in future replies.",
+        "Challenge my assumptions more directly.",
+        "Use a supportive but practical tone.",
+        "Ask one follow-up question after each answer.",
+        "Help me stay accountable with direct check-ins.",
+        "Use simpler words when explaining technical topics.",
+    ],
+    "productivity": [
+        "Turn this goal into a 7-day action plan: ...",
+        "Create a deep-work schedule for my day.",
+        "Break this project into milestones and risks.",
+        "Build a meeting agenda from these notes: ...",
+        "Convert this messy text into clear tasks with owners.",
+        "Give me a shutdown checklist for end of workday.",
+    ],
+}
 
 
 class MessageHandlers:
@@ -122,11 +204,80 @@ class MessageHandlers:
         if self.is_admin(user_id):
             await self._reply(
                 update,
-                "Admin commands: /status /personality /memories /reflect /reset /mcp /schedule /help",
+                "Admin commands: /status /personality /memories /reflect /reset /mcp /schedule /example /help",
                 reply_markup=get_admin_menu(),
             )
             return
-        await self._reply(update, "Public commands: /start /help")
+        await self._reply(update, "Public commands: /start /example /help")
+
+    @staticmethod
+    def _chunk_lines(lines: list[str], max_chars: int = 3500) -> list[str]:
+        chunks: list[str] = []
+        current = ""
+        for line in lines:
+            candidate = f"{current}\n{line}".strip()
+            if len(candidate) > max_chars and current:
+                chunks.append(current)
+                current = line
+            else:
+                current = candidate
+        if current:
+            chunks.append(current)
+        return chunks
+
+    async def example_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        args = [str(arg).strip().lower() for arg in (context.args or []) if str(arg).strip()]
+        requested_topic = args[0] if args else "overview"
+
+        available_topics = sorted(_EXAMPLE_PROMPTS.keys())
+        if requested_topic == "overview":
+            lines = [
+                "🧭 HER Examples",
+                "Use: /example <topic>",
+                "Use: /example all",
+                f"Topics: {', '.join(available_topics)}",
+                "",
+                "Try these now:",
+            ]
+            seed_examples = (
+                _EXAMPLE_PROMPTS["chat"][:2]
+                + _EXAMPLE_PROMPTS["scheduling"][:2]
+                + _EXAMPLE_PROMPTS["automation"][:2]
+            )
+            for sample in seed_examples:
+                lines.append(f"- {sample}")
+            lines.append("")
+            lines.append("Full library: docs/examples.md")
+            await self._reply(update, "\n".join(lines))
+            return
+
+        if requested_topic == "all":
+            lines = ["📚 Full Example Library (/example all)"]
+            for topic in available_topics:
+                lines.append("")
+                lines.append(f"[{topic}]")
+                for idx, prompt in enumerate(_EXAMPLE_PROMPTS[topic], start=1):
+                    lines.append(f"{idx}. {prompt}")
+            lines.append("")
+            lines.append("More: docs/examples.md")
+            for chunk in self._chunk_lines(lines):
+                await self._reply(update, chunk)
+            return
+
+        if requested_topic not in _EXAMPLE_PROMPTS:
+            await self._reply(
+                update,
+                f"Unknown topic '{requested_topic}'. Available: {', '.join(available_topics)}",
+            )
+            return
+
+        topic_lines = [f"🧩 Examples: {requested_topic}"]
+        for idx, prompt in enumerate(_EXAMPLE_PROMPTS[requested_topic], start=1):
+            topic_lines.append(f"{idx}. {prompt}")
+        topic_lines.append("")
+        topic_lines.append("More topics: /example overview")
+        topic_lines.append("Full library: docs/examples.md")
+        await self._reply(update, "\n".join(topic_lines))
 
     async def status_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not self.is_admin(update.effective_user.id):

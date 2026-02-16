@@ -62,6 +62,7 @@ class HERBot:
         self.app.add_handler(CommandHandler("reset", self.handlers.reset_command))
         self.app.add_handler(CommandHandler("mcp", self.handlers.mcp_command))
         self.app.add_handler(CommandHandler("schedule", self.handlers.schedule_command))
+        self.app.add_handler(CommandHandler("example", self.handlers.example_command))
         self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handlers.handle_message))
         self.app.add_handler(CallbackQueryHandler(self.handlers.handle_callback))
 

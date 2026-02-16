@@ -70,6 +70,18 @@ Expected:
 - Admin sees admin command list.
 - Public user sees public command list.
 
+### 3.2.1 `/example` returns prompt library topics
+
+Send:
+
+```text
+/example
+```
+
+Expected:
+- Bot returns topic list and usage (`/example <topic>`, `/example all`).
+- Response includes examples for scheduling/automation.
+
 ### 3.3 Conversational response path works
 
 Send:

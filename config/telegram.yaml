@@ -12,10 +12,12 @@ bot:
       - /reset - Clear conversation context
       - /mcp - View MCP server status
       - /schedule - Manage scheduled tasks
+      - /example - Show ready-to-use examples
       - /help - Show all commands
 
     public:
       - /start - Start chatting with HER
+      - /example - Show ready-to-use examples
       - /help - Get help
 
   features:

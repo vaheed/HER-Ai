@@ -91,6 +91,7 @@ docker compose logs -f her-bot
 - **Admin Mode**: Full access, personality tuning, memory management
 - **Public Mode**: User interactions, approval-based features
 - **Natural Scheduling**: Users can request reminders/jobs in plain language (no `/schedule` syntax required)
+- **Example Library**: `/example` command plus 60+ ready prompts in docs for fast onboarding
 
 ### 📊 Real-Time Dashboard
 - **Monitoring**: Conversation logs, agent activity, system health
@@ -106,6 +107,7 @@ Comprehensive documentation is available in the `docs/` directory:
 - **[MCP Integration Guide](docs/mcp_guide.md)** - Model Context Protocol integration, server configuration, and tool usage
 - **[Admin Dashboard](docs/dashboard.md)** - Dashboard features, usage, and configuration
 - **[Testing Playbook](docs/testing_playbook.md)** - Step-by-step capability testing and validation guide
+- **[Prompt Examples](docs/examples.md)** - 60+ short prompts covering chat, memory, tools, sandbox, and automation
 
 ### Project Management
 - **[Project Roadmap](docs/roadmap.md)** - Development phases, milestones, and implementation timeline

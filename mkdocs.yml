@@ -9,6 +9,8 @@ nav:
   - Phase 1 Prompt: phase1_prompt.md
   - MCP Guide: mcp_guide.md
   - Admin Dashboard: dashboard.md
+  - Testing Playbook: testing_playbook.md
+  - Prompt Examples: examples.md
 
 theme:
   name: material

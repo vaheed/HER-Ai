@@ -192,6 +192,9 @@ class MessageHandlers:
             return
         await message.reply_text(text, **kwargs)
 
+    async def _reply_markdown(self, update: Update, text: str, **kwargs: Any) -> None:
+        await self._reply(update, text, parse_mode="Markdown", **kwargs)
+
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
         if self.is_admin(user_id):
@@ -202,13 +205,32 @@ class MessageHandlers:
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
         if self.is_admin(user_id):
-            await self._reply(
+            await self._reply_markdown(
                 update,
-                "Admin commands: /status /personality /memories /reflect /reset /mcp /schedule /example /help",
+                (
+                    "*Admin Commands*\n"
+                    "- `/status`\n"
+                    "- `/personality`\n"
+                    "- `/memories`\n"
+                    "- `/reflect`\n"
+                    "- `/reset`\n"
+                    "- `/mcp`\n"
+                    "- `/schedule`\n"
+                    "- `/example`\n"
+                    "- `/help`"
+                ),
                 reply_markup=get_admin_menu(),
             )
             return
-        await self._reply(update, "Public commands: /start /example /help")
+        await self._reply_markdown(
+            update,
+            (
+                "*Public Commands*\n"
+                "- `/start`\n"
+                "- `/example`\n"
+                "- `/help`"
+            ),
+        )
 
     @staticmethod
     def _chunk_lines(lines: list[str], max_chars: int = 3500) -> list[str]:
@@ -341,7 +363,7 @@ class MessageHandlers:
             if not tasks:
                 await self._reply(update, "⏰ No scheduled tasks configured.")
                 return
-            lines = ["⏰ Scheduled tasks:"]
+            task_lines = []
             for task in tasks:
                 name = task.get("name", "unknown")
                 task_type = task.get("type", "custom")
@@ -350,17 +372,32 @@ class MessageHandlers:
                 next_run = task.get("_next_run", "pending")
                 at_value = task.get("at")
                 suffix = f" | at={at_value}" if at_value else ""
-                lines.append(
+                task_lines.append(
                     f"- {name} | type={task_type} | interval={interval} | enabled={enabled} | next={next_run}{suffix}"
                 )
-            lines.append("")
-            lines.append("Use: /schedule set <task> <interval>")
-            lines.append("Use: /schedule enable <task> | /schedule disable <task>")
-            lines.append("Use: /schedule run <task>")
-            lines.append("Use: /schedule add <name> <type> <interval> [key=value ...]")
-            lines.append("Reminder example: /schedule add stretch reminder daily at=09:00 timezone=UTC message='Take a short stretch break' notify_user_id=123456789")
-            lines.append("Example: /schedule add any_rule workflow every_5_minutes source_url=https://example/api steps_json='[{\"action\":\"log\",\"message\":\"tick {now_utc}\"}]'")
-            await self._reply(update, "\n".join(lines))
+            usage_lines = [
+                "/schedule set <task> <interval>",
+                "/schedule enable <task> | /schedule disable <task>",
+                "/schedule run <task>",
+                "/schedule add <name> <type> <interval> [key=value ...]",
+                "",
+                "Reminder example:",
+                "/schedule add stretch reminder daily at=09:00 timezone=UTC message='Take a short stretch break' notify_user_id=123456789",
+                "",
+                "Workflow example:",
+                "/schedule add any_rule workflow every_5_minutes source_url=https://example/api steps_json='[{\"action\":\"log\",\"message\":\"tick {now_utc}\"}]'",
+            ]
+            message = (
+                "*⏰ Scheduled Tasks*\n"
+                "```text\n"
+                + "\n".join(task_lines)
+                + "\n```\n\n"
+                "*Usage*\n"
+                "```text\n"
+                + "\n".join(usage_lines)
+                + "\n```"
+            )
+            await self._reply_markdown(update, message)
             return
 
         if action == "set":
@@ -1487,6 +1524,7 @@ class MessageHandlers:
                 content=(
                     "You are HER. Warm, empathetic, practical, concise. "
                     "Be truthful about runtime capabilities. "
+                    "If you include code, always format it in fenced code blocks. "
                     "If live context indicates internet capability is available or includes fresh web results, "
                     "do not claim you have no internet access."
                 )

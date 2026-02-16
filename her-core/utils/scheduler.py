@@ -608,8 +608,7 @@ class TaskScheduler:
             redis_client.lpush("her:scheduler:jobs", json.dumps(payload))
             redis_client.ltrim("her:scheduler:jobs", 0, 99)
         except Exception:  # noqa: BLE001
-            # Silently fail if Redis not available
-            pass
+            logger.warning("Failed to log scheduled job execution to Redis")
 
     async def _execute_twitter_task(self, task: dict[str, Any]):
         """Execute Twitter scheduled task."""

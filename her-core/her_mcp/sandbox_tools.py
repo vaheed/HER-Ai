@@ -17,7 +17,6 @@ import time
 from typing import Any
 
 from langchain_core.tools import BaseTool
-from pydantic import PrivateAttr
 
 logger = logging.getLogger(__name__)
 
@@ -257,11 +256,7 @@ class SandboxCommandTool(BaseTool):
         "Returns stdout, stderr, exit code, and execution time."
     )
 
-    _executor: SandboxExecutor = PrivateAttr()
-
-    def __init__(self, container_name: str = "her-sandbox", **kwargs: Any):
-        super().__init__(**kwargs)
-        self._executor = SandboxExecutor(container_name)
+    container_name: str = "her-sandbox"
 
     def _run(
         self,
@@ -274,7 +269,8 @@ class SandboxCommandTool(BaseTool):
         if not command.strip():
             return "Error: Empty command"
 
-        result = self._executor.execute_command(command, timeout=int(timeout), workdir=workdir)
+        executor = SandboxExecutor(self.container_name)
+        result = executor.execute_command(command, timeout=int(timeout), workdir=workdir)
 
         response_parts = []
         if result["success"]:
@@ -303,11 +299,7 @@ class SandboxPythonTool(BaseTool):
         "Code runs in isolated sandbox environment."
     )
 
-    _executor: SandboxExecutor = PrivateAttr()
-
-    def __init__(self, container_name: str = "her-sandbox", **kwargs: Any):
-        super().__init__(**kwargs)
-        self._executor = SandboxExecutor(container_name)
+    container_name: str = "her-sandbox"
 
     def _run(
         self,
@@ -320,7 +312,8 @@ class SandboxPythonTool(BaseTool):
         if not code.strip():
             return "Error: Empty code"
 
-        result = self._executor.execute_python(code, timeout=int(timeout), workdir=workdir)
+        executor = SandboxExecutor(self.container_name)
+        result = executor.execute_python(code, timeout=int(timeout), workdir=workdir)
 
         response_parts = []
         if result["success"]:
@@ -349,11 +342,7 @@ class SandboxWebTool(BaseTool):
         "Returns response content, headers, and status codes."
     )
 
-    _executor: SandboxExecutor = PrivateAttr()
-
-    def __init__(self, container_name: str = "her-sandbox", **kwargs: Any):
-        super().__init__(**kwargs)
-        self._executor = SandboxExecutor(container_name)
+    container_name: str = "her-sandbox"
 
     def _run(
         self,
@@ -384,7 +373,8 @@ class SandboxWebTool(BaseTool):
 
         command = " ".join(f'"{part}"' if " " in part else part for part in cmd_parts)
 
-        result = self._executor.execute_command(command, timeout=int(timeout) + 5)
+        executor = SandboxExecutor(self.container_name)
+        result = executor.execute_command(command, timeout=int(timeout) + 5)
 
         response_parts = []
         if result["success"]:
@@ -422,11 +412,7 @@ class SandboxTestTool(BaseTool):
         "Returns test results, coverage, and execution metrics."
     )
 
-    _executor: SandboxExecutor = PrivateAttr()
-
-    def __init__(self, container_name: str = "her-sandbox", **kwargs: Any):
-        super().__init__(**kwargs)
-        self._executor = SandboxExecutor(container_name)
+    container_name: str = "her-sandbox"
 
     def _run(
         self,
@@ -449,7 +435,8 @@ class SandboxTestTool(BaseTool):
         else:
             command = f"python3 {test_file}"
 
-        result = self._executor.execute_command(command, timeout=int(timeout))
+        executor = SandboxExecutor(self.container_name)
+        result = executor.execute_command(command, timeout=int(timeout))
 
         response_parts = []
         if result["success"]:
@@ -478,11 +465,7 @@ class SandboxReportTool(BaseTool):
         "and perform data analysis. Returns formatted report content."
     )
 
-    _executor: SandboxExecutor = PrivateAttr()
-
-    def __init__(self, container_name: str = "her-sandbox", **kwargs: Any):
-        super().__init__(**kwargs)
-        self._executor = SandboxExecutor(container_name)
+    container_name: str = "her-sandbox"
 
     def _run(
         self,
@@ -497,7 +480,8 @@ class SandboxReportTool(BaseTool):
 
         if report_script:
             # Execute custom report script
-            result = self._executor.execute_shell(report_script)
+            executor = SandboxExecutor(self.container_name)
+            result = executor.execute_shell(report_script)
         else:
             # Generate basic report from data file
             python_code = f"""
@@ -535,7 +519,8 @@ except Exception as e:
     print(f"Error processing data: {{e}}", file=sys.stderr)
     sys.exit(1)
 """
-            result = self._executor.execute_python(python_code)
+            executor = SandboxExecutor(self.container_name)
+            result = executor.execute_python(python_code)
 
         response_parts = []
         if result["success"]:
@@ -563,11 +548,7 @@ class SandboxNetworkTool(BaseTool):
         "Supports DNS lookup, ping, traceroute, port scan (nmap), and SSL checks."
     )
 
-    _executor: SandboxExecutor = PrivateAttr()
-
-    def __init__(self, container_name: str = "her-sandbox", **kwargs: Any):
-        super().__init__(**kwargs)
-        self._executor = SandboxExecutor(container_name)
+    container_name: str = "her-sandbox"
 
     def _run(
         self,
@@ -595,7 +576,8 @@ class SandboxNetworkTool(BaseTool):
         else:
             return "Error: Unsupported action. Use dns, ping, traceroute, port_scan, or ssl."
 
-        result = self._executor.execute_command(command, timeout=int(timeout))
+        executor = SandboxExecutor(self.container_name)
+        result = executor.execute_command(command, timeout=int(timeout))
 
         response_parts = []
         if result["success"]:
@@ -620,11 +602,7 @@ class SandboxSecurityScanTool(BaseTool):
         "HTTP headers, robots.txt, TLS info, and common-port scans via nmap."
     )
 
-    _executor: SandboxExecutor = PrivateAttr()
-
-    def __init__(self, container_name: str = "her-sandbox", **kwargs: Any):
-        super().__init__(**kwargs)
-        self._executor = SandboxExecutor(container_name)
+    container_name: str = "her-sandbox"
 
     def _run(
         self,
@@ -658,7 +636,8 @@ echo | openssl s_client -connect "{target}:443" -servername "{target}" 2>/dev/nu
         else:
             return "Error: Unsupported mode. Use website or host."
 
-        result = self._executor.execute_shell(script, timeout=int(timeout))
+        executor = SandboxExecutor(self.container_name)
+        result = executor.execute_shell(script, timeout=int(timeout))
 
         response_parts = []
         if result["success"]:

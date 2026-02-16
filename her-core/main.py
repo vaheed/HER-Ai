@@ -197,6 +197,14 @@ async def async_main(config: AppConfig) -> None:
     # Start task scheduler
     await scheduler.start()
     logger.info("✓ Task scheduler started")
+    try:
+        ok, details = await scheduler.run_task_now("memory_reflection")
+        if ok:
+            logger.info("✓ Scheduler startup sanity run executed: memory_reflection (%s)", details)
+        else:
+            logger.warning("Scheduler startup sanity run failed: %s", details)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Scheduler startup sanity run errored: %s", exc)
 
     if config.telegram_enabled and config.telegram_bot_token:
         await bot.start()

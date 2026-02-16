@@ -171,6 +171,16 @@ Expected:
 Send:
 
 ```text
+Check BTC price every 2 minutes and notify me when it is 10% above the current price
+```
+
+Expected:
+- HER confirms automation setup naturally.
+- A workflow task is created with interval + condition steps and appears in `/schedule list`.
+
+Send:
+
+```text
 That was perfect, thank you.
 ```
 

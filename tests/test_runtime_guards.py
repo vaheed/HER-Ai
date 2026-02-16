@@ -235,6 +235,9 @@ def test_telegram_registers_schedule_admin_command() -> None:
     assert "_EVERY_INTERVAL_PATTERN" in handlers_source
     assert "_IN_INTERVAL_PATTERN" in handlers_source
     assert "def _interval_unit_to_base" in handlers_source
+    assert "def _parse_schedule_request_with_llm" in handlers_source
+    assert "Return strict JSON only" in handlers_source
+    assert "self._parse_schedule_request_with_llm(message, user_id)" in handlers_source
 
 
 def test_reinforcement_engine_persists_scores_and_profiles() -> None:

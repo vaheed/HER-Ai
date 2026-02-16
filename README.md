@@ -262,6 +262,7 @@ Common issues and solutions:
 - **OpenRouter + Memory**: long-term memory uses Mem0's OpenAI-compatible adapter internally when `LLM_PROVIDER=openrouter`, so OpenRouter chat + memory can run together
 - **Ollama Memory Errors**: If logs show `model requires more system memory ... than is available`, your Ollama chat model is too large for current container RAM; switch to a smaller `OLLAMA_MODEL` (or raise memory limits) to restore long-term memory writes/search quality
 - **Graceful Degradation**: If PostgreSQL/Mem0/Redis are temporarily unavailable at startup, HER now continues in degraded mode using in-process fallback memory so the agent can still reply while infra recovers
+- **Natural-Language Scheduling**: HER now first compiles scheduling requests into validated task JSON using the chat model (with provider failover), then falls back to rule-based parsing if needed
 
 ### Telegram Connection Issues
 - Verify `TELEGRAM_BOT_TOKEN` is correct

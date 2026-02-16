@@ -561,6 +561,236 @@ class MessageHandlers:
             return "hours"
         return "days"
 
+    def _looks_like_scheduling_intent(self, message: str) -> bool:
+        lower = message.lower()
+        markers = (
+            "remind",
+            "remember",
+            "schedule",
+            "notify me",
+            "alert me",
+            "every ",
+            "in ",
+            "after ",
+            "tomorrow",
+            "next ",
+            "at ",
+            "daily",
+            "weekly",
+            "hourly",
+        )
+        return any(marker in lower for marker in markers)
+
+    @staticmethod
+    def _extract_json_object(raw: str) -> dict[str, Any] | None:
+        text = str(raw or "").strip()
+        if not text:
+            return None
+        cleaned = text
+        if cleaned.startswith("```"):
+            cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.IGNORECASE).strip()
+            cleaned = re.sub(r"\s*```$", "", cleaned).strip()
+        try:
+            parsed = json.loads(cleaned)
+            return parsed if isinstance(parsed, dict) else None
+        except json.JSONDecodeError:
+            start = cleaned.find("{")
+            end = cleaned.rfind("}")
+            if start == -1 or end == -1 or end <= start:
+                return None
+            try:
+                parsed = json.loads(cleaned[start : end + 1])
+                return parsed if isinstance(parsed, dict) else None
+            except json.JSONDecodeError:
+                return None
+
+    @staticmethod
+    def _normalize_weekdays_input(raw: Any) -> list[int]:
+        if not isinstance(raw, list):
+            return []
+        mapping = {
+            "mon": 0,
+            "monday": 0,
+            "tue": 1,
+            "tuesday": 1,
+            "wed": 2,
+            "wednesday": 2,
+            "thu": 3,
+            "thursday": 3,
+            "fri": 4,
+            "friday": 4,
+            "sat": 5,
+            "saturday": 5,
+            "sun": 6,
+            "sunday": 6,
+        }
+        normalized: set[int] = set()
+        for item in raw:
+            if isinstance(item, int) and 0 <= item <= 6:
+                normalized.add(item)
+                continue
+            text = str(item).strip().lower()
+            if text in mapping:
+                normalized.add(mapping[text])
+        return sorted(normalized)
+
+    def _normalize_ai_schedule_task(
+        self,
+        task: Any,
+        user_id: int,
+        source_message: str,
+        now_utc: datetime,
+    ) -> dict[str, Any] | None:
+        if not isinstance(task, dict) or not self.scheduler:
+            return None
+
+        interval = str(task.get("interval", "")).strip().lower()
+        if not self.scheduler.is_valid_interval(interval):
+            return None
+
+        task_type = str(task.get("type", "reminder")).strip().lower() or "reminder"
+        if task_type not in {"reminder", "workflow", "custom"}:
+            task_type = "reminder"
+
+        name_raw = str(task.get("name", "")).strip()
+        if name_raw:
+            task_name = self._slug(name_raw, max_len=56)
+        else:
+            task_name = f"nl_{self._slug(source_message)}_{user_id}"
+
+        normalized: dict[str, Any] = {
+            "name": task_name,
+            "type": task_type,
+            "interval": interval,
+            "enabled": bool(task.get("enabled", True)),
+            "one_time": bool(task.get("one_time", interval == "once")),
+            "max_retries": max(0, int(task.get("max_retries", 2) or 2)),
+            "retry_delay_seconds": max(1, int(task.get("retry_delay_seconds", 30) or 30)),
+        }
+
+        notify_user_id = task.get("notify_user_id")
+        if isinstance(notify_user_id, int):
+            normalized["notify_user_id"] = notify_user_id
+        elif str(notify_user_id or "").strip().isdigit():
+            normalized["notify_user_id"] = int(str(notify_user_id).strip())
+        else:
+            normalized["notify_user_id"] = user_id
+
+        run_at = str(task.get("run_at", "")).strip()
+        if run_at:
+            try:
+                run_at_dt = datetime.fromisoformat(run_at.replace("Z", "+00:00"))
+                if run_at_dt.tzinfo is None:
+                    run_at_dt = run_at_dt.replace(tzinfo=UTC)
+                normalized["run_at"] = run_at_dt.astimezone(UTC).isoformat()
+            except ValueError:
+                if interval == "once":
+                    normalized["run_at"] = (now_utc + timedelta(minutes=5)).isoformat()
+
+        at_value = str(task.get("at", "")).strip()
+        if at_value and re.match(r"^\d{2}:\d{2}$", at_value):
+            hour, minute = at_value.split(":", 1)
+            if 0 <= int(hour) <= 23 and 0 <= int(minute) <= 59:
+                normalized["at"] = at_value
+
+        timezone_value = str(task.get("timezone", os.getenv("TZ", "UTC"))).strip() or "UTC"
+        normalized["timezone"] = timezone_value
+
+        weekdays = self._normalize_weekdays_input(task.get("weekdays"))
+        if weekdays:
+            normalized["weekdays"] = weekdays
+
+        message_text = str(task.get("message", "")).strip()
+        if task_type == "reminder":
+            normalized["message"] = message_text or self._extract_reminder_body(source_message) or "Reminder"
+
+        if task_type == "workflow":
+            steps = task.get("steps")
+            if not isinstance(steps, list) or not steps:
+                return None
+            filtered_steps = [item for item in steps if isinstance(item, dict)]
+            if not filtered_steps:
+                return None
+            normalized["steps"] = filtered_steps
+            source_url = str(task.get("source_url", "")).strip()
+            if source_url:
+                normalized["source_url"] = source_url
+            condition_expr = str(task.get("condition_expr", "")).strip()
+            if condition_expr:
+                normalized["condition_expr"] = condition_expr
+
+        return normalized
+
+    def _parse_schedule_request_with_llm(
+        self,
+        message: str,
+        user_id: int,
+    ) -> tuple[dict[str, Any] | None, str | None]:
+        if not self.scheduler:
+            return None, None
+        if not self._looks_like_scheduling_intent(message):
+            return None, None
+
+        now_utc = datetime.now(UTC)
+        prompt = (
+            "Convert this user message into ONE scheduler task for a Telegram assistant.\n"
+            "Current UTC time: "
+            f"{now_utc.isoformat()}\n"
+            "Return strict JSON only (no markdown) with this schema:\n"
+            "{\n"
+            '  "create_task": boolean,\n'
+            '  "confirmation": "short human confirmation",\n'
+            '  "task": {\n'
+            '    "name": "short_name_optional",\n'
+            '    "type": "reminder|workflow|custom",\n'
+            '    "interval": "once|hourly|daily|weekly|every_<N>_minutes|every_<N>_hours|every_<N>_days",\n'
+            '    "run_at": "ISO8601 optional for one-time",\n'
+            '    "at": "HH:MM optional",\n'
+            '    "timezone": "IANA timezone optional",\n'
+            '    "weekdays": [0-6 optional],\n'
+            '    "message": "for reminder tasks",\n'
+            '    "notify_user_id": 0,\n'
+            '    "source_url": "optional for workflows",\n'
+            '    "condition_expr": "optional python-like expression",\n'
+            '    "steps": [{"action":"set|set_state|notify|fetch_json|log|webhook", "key":"...", "expr":"...", "when":"...", "message":"..."}]\n'
+            "  }\n"
+            "}\n"
+            "Rules:\n"
+            "- If message is not a scheduling request, return {\"create_task\": false}.\n"
+            "- Keep task safe and minimal.\n"
+            "- For one-time reminders like 'in 5 minutes', provide run_at using current UTC time.\n"
+            "- For thresholds/automation conditions, use type=workflow with steps.\n"
+            f"User message: {message}"
+        )
+
+        llm_messages = [
+            SystemMessage(
+                content=(
+                    "You convert natural-language scheduling requests to strict JSON for a task scheduler. "
+                    "Return JSON only."
+                )
+            ),
+            HumanMessage(content=prompt),
+        ]
+        try:
+            response_text, _ = self._generate_response_with_failover(llm_messages, user_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("LLM schedule parser unavailable for user %s: %s", user_id, exc)
+            return None, None
+
+        payload = self._extract_json_object(response_text)
+        if not payload:
+            return None, None
+        if not bool(payload.get("create_task")):
+            return None, None
+
+        normalized_task = self._normalize_ai_schedule_task(payload.get("task"), user_id, message, now_utc)
+        if not normalized_task:
+            return None, None
+
+        confirmation = str(payload.get("confirmation", "")).strip() or "Got it. I scheduled that."
+        return normalized_task, confirmation
+
     def _goal_growth_intent(self, message: str) -> bool:
         lower = message.lower()
         phrases = [
@@ -576,6 +806,10 @@ class MessageHandlers:
     def _parse_schedule_request(self, message: str, user_id: int) -> tuple[dict[str, Any] | None, str | None]:
         if not self.scheduler:
             return None, None
+
+        llm_task, llm_confirmation = self._parse_schedule_request_with_llm(message, user_id)
+        if llm_task and llm_confirmation:
+            return llm_task, llm_confirmation
 
         text = message.strip()
         lower = text.lower()

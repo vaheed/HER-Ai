@@ -103,6 +103,18 @@ def test_telegram_retries_transient_llm_failures_and_parses_retry_hints() -> Non
     assert "I'm temporarily rate-limited by the model provider." in source
 
 
+def test_telegram_handler_fails_over_to_ollama_on_502_503() -> None:
+    handlers_source = Path("her-core/her_telegram/handlers.py").read_text()
+    env_example = Path(".env.example").read_text()
+
+    assert "if status_code in {502, 503}" in handlers_source
+    assert "self._fallback_llm" in handlers_source
+    assert "event_type=\"llm_failover\"" in handlers_source
+    assert "Primary LLM provider '%s' failed with status %s; retrying with fallback '%s'" in handlers_source
+    assert "LLM_ENABLE_FALLBACK=true" in env_example
+    assert "LLM_FALLBACK_PROVIDER=ollama" in env_example
+
+
 def test_openrouter_provider_is_supported_for_chat_and_memory() -> None:
     llm_factory_source = Path("her-core/utils/llm_factory.py").read_text()
     mem_source = Path("her-core/memory/mem0_client.py").read_text()
@@ -115,6 +127,8 @@ def test_openrouter_provider_is_supported_for_chat_and_memory() -> None:
     assert 'OPENROUTER_API_BASE' in env_example
     assert 'openrouter_api_key' in config_source
     assert 'if config.llm_provider == "openrouter"' in mem_source
+    assert "def _resolve_mem0_llm_provider" in mem_source
+    assert 'return "openai"' in mem_source
 
 
 def test_web_search_uses_no_key_curl_fallback() -> None:
@@ -218,6 +232,9 @@ def test_telegram_registers_schedule_admin_command() -> None:
     assert "Adaptive communication profile" in handlers_source
     assert "reinforcement_lesson" in handlers_source
     assert "if isinstance(text_value, list)" in handlers_source
+    assert "_EVERY_INTERVAL_PATTERN" in handlers_source
+    assert "_IN_INTERVAL_PATTERN" in handlers_source
+    assert "def _interval_unit_to_base" in handlers_source
 
 
 def test_reinforcement_engine_persists_scores_and_profiles() -> None:

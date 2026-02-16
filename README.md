@@ -175,6 +175,8 @@ ADMIN_USER_ID=your_telegram_user_id
 
 # LLM Provider (choose one)
 LLM_PROVIDER=ollama  # or openai, groq, openrouter
+LLM_ENABLE_FALLBACK=true
+LLM_FALLBACK_PROVIDER=ollama
 OLLAMA_MODEL=llama3.2:3b
 
 # Database
@@ -256,6 +258,8 @@ Common issues and solutions:
 - Verify your LLM provider credentials are correct
 - Check container logs: `docker compose logs her-bot`
 - Ensure sufficient system resources (RAM/CPU)
+- **Provider Over-Capacity (502/503)**: HER now auto-fails over to `LLM_FALLBACK_PROVIDER` (default `ollama`) when the primary provider returns HTTP `502`/`503`; keep Ollama running and ensure the fallback model is pulled
+- **OpenRouter + Memory**: long-term memory uses Mem0's OpenAI-compatible adapter internally when `LLM_PROVIDER=openrouter`, so OpenRouter chat + memory can run together
 - **Ollama Memory Errors**: If logs show `model requires more system memory ... than is available`, your Ollama chat model is too large for current container RAM; switch to a smaller `OLLAMA_MODEL` (or raise memory limits) to restore long-term memory writes/search quality
 - **Graceful Degradation**: If PostgreSQL/Mem0/Redis are temporarily unavailable at startup, HER now continues in degraded mode using in-process fallback memory so the agent can still reply while infra recovers
 

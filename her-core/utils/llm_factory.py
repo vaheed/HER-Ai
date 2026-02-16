@@ -3,8 +3,8 @@ import os
 from langchain_openai import ChatOpenAI
 
 
-def build_llm() -> ChatOpenAI:
-    provider = os.getenv("LLM_PROVIDER", "ollama").lower()
+def build_llm(provider: str | None = None) -> ChatOpenAI:
+    provider = (provider or os.getenv("LLM_PROVIDER", "ollama")).lower()
     if provider == "ollama":
         base_url = os.getenv("OLLAMA_BASE_URL", os.getenv("OLLAMA_HOST", "http://ollama:11434")).rstrip("/")
         return ChatOpenAI(

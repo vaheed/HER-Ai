@@ -53,7 +53,7 @@ class HERMemory:
                     },
                 },
                 "llm": {
-                    "provider": config.llm_provider,
+                    "provider": self._resolve_mem0_llm_provider(config.llm_provider),
                     "config": llm_config,
                 },
                 "embedder": {
@@ -64,6 +64,14 @@ class HERMemory:
                 "embedding_model_dims": config.embedding_dimensions,
             }
         )
+
+    @staticmethod
+    def _resolve_mem0_llm_provider(provider: str) -> str:
+        normalized = (provider or "").strip().lower()
+        if normalized == "openrouter":
+            # Mem0 validates provider names and expects OpenAI-compatible routing here.
+            return "openai"
+        return normalized
 
     @staticmethod
     def _build_llm_config(config: AppConfig) -> dict[str, Any]:

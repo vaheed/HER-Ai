@@ -25,6 +25,16 @@ from utils.scheduler import TaskScheduler
 
 logger = logging.getLogger(__name__)
 _INTERNET_DENIAL_PATTERN = re.compile(r"\b(no|not|cannot|can't)\b.*\binternet\b", re.IGNORECASE)
+_RETRY_IN_MIN_SEC_PATTERN = re.compile(r"try again in\s+(\d+)m([\d.]+)s", re.IGNORECASE)
+_RETRY_AFTER_SECONDS_PATTERN = re.compile(r"retry after\s+(\d+)s", re.IGNORECASE)
+_EVERY_INTERVAL_PATTERN = re.compile(
+    r"\bevery\s+(\d+)\s*(m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days)\b",
+    re.IGNORECASE,
+)
+_IN_INTERVAL_PATTERN = re.compile(
+    r"\b(?:in|after)\s+(\d+)\s*(m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days)\b",
+    re.IGNORECASE,
+)
 _WEEKDAY_TO_INDEX = {
     "monday": 0,
     "tuesday": 1,
@@ -65,7 +75,15 @@ class MessageHandlers:
         self.group_reply_on_mention_only = group_reply_on_mention_only
         self.group_summary_every_messages = max(5, group_summary_every_messages)
         self.bot_username: str | None = None
+        self._llm_provider = os.getenv("LLM_PROVIDER", "ollama").lower()
         self._llm = build_llm()
+        self._fallback_provider = os.getenv("LLM_FALLBACK_PROVIDER", "ollama").lower()
+        fallback_enabled = os.getenv("LLM_ENABLE_FALLBACK", "true").strip().lower() in {"1", "true", "yes", "on"}
+        self._fallback_llm = (
+            build_llm(self._fallback_provider)
+            if fallback_enabled and self._fallback_provider != self._llm_provider
+            else None
+        )
         self._web_search_tool = CurlWebSearchTool()
         self._decision_logger = DecisionLogger()
         self._reinforcement = ReinforcementEngine()
@@ -440,13 +458,13 @@ class MessageHandlers:
         )
 
         try:
-            summary = self._llm.invoke(
+            summary_text, _ = self._generate_response_with_failover(
                 [
                     SystemMessage(content="You extract durable memory summaries from chats."),
                     HumanMessage(content=prompt),
-                ]
+                ],
+                chat_id,
             )
-            summary_text = (summary.content or "").strip() if summary else ""
             if summary_text:
                 self.memory.add_memory(group_key, summary_text, "group_summary", 0.9)
         except Exception as exc:  # noqa: BLE001
@@ -524,15 +542,24 @@ class MessageHandlers:
                 start = match.start(1)
                 body = text[start:].strip(" .")
                 body = re.sub(
-                    r"\s+(in\s+\d+\s+(minutes?|hours?|days?)|tomorrow(?:\s+at\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?)?|"
+                    r"\s+((?:in|after)\s+\d+\s*(?:m|min|mins|minutes?|h|hr|hrs|hours?|d|days?)|tomorrow(?:\s+at\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?)?|"
                     r"next\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)(?:\s+at\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?)?|"
-                    r"every\s+\d+\s+(minutes?|hours?|days?)|every day|daily|once a week|every week|weekly)\b.*$",
+                    r"every\s+\d+\s*(?:m|min|mins|minutes?|h|hr|hrs|hours?|d|days?)|every day|daily|once a week|every week|weekly)\b.*$",
                     "",
                     body,
                     flags=re.IGNORECASE,
                 ).strip(" .")
                 return body or "your reminder"
         return text[:220]
+
+    @staticmethod
+    def _interval_unit_to_base(unit: str) -> str:
+        lower = unit.strip().lower()
+        if lower in {"m", "min", "mins", "minute", "minutes"}:
+            return "minutes"
+        if lower in {"h", "hr", "hrs", "hour", "hours"}:
+            return "hours"
+        return "days"
 
     def _goal_growth_intent(self, message: str) -> bool:
         lower = message.lower()
@@ -582,11 +609,11 @@ class MessageHandlers:
             )
 
         # every N minutes/hours/days
-        every_match = re.search(r"\bevery\s+(\d+)\s+(minute|minutes|hour|hours|day|days)\b", lower)
+        every_match = _EVERY_INTERVAL_PATTERN.search(lower)
         if every_match:
             value = int(every_match.group(1))
             unit = every_match.group(2)
-            base = "minutes" if "minute" in unit else "hours" if "hour" in unit else "days"
+            base = self._interval_unit_to_base(unit)
             interval = f"every_{max(1, value)}_{base}"
             task_name = f"auto_{self._slug(reminder_body)}_{user_id}"
             return (
@@ -644,14 +671,15 @@ class MessageHandlers:
             )
 
         # in N minutes/hours/days
-        in_match = re.search(r"\bin\s+(\d+)\s+(minute|minutes|hour|hours|day|days)\b", lower)
+        in_match = _IN_INTERVAL_PATTERN.search(lower)
         if in_match and future_intent:
             value = int(in_match.group(1))
             unit = in_match.group(2)
             delta = timedelta(minutes=value)
-            if "hour" in unit:
+            normalized = self._interval_unit_to_base(unit)
+            if normalized == "hours":
                 delta = timedelta(hours=value)
-            elif "day" in unit:
+            elif normalized == "days":
                 delta = timedelta(days=value)
             run_at = now + delta
             task_name = f"once_{self._slug(reminder_body)}_{int(now.timestamp())}_{user_id}"
@@ -669,7 +697,7 @@ class MessageHandlers:
                     "max_retries": 2,
                     "retry_delay_seconds": 30,
                 },
-                f"Got it. I'll remind you in {value} {unit}.",
+                f"Got it. I'll remind you in {value} {normalized}.",
             )
 
         # tomorrow at X
@@ -875,6 +903,119 @@ class MessageHandlers:
             return "I can also turn this into a recurring check-in so we track progress over time."
         return None
 
+    @staticmethod
+    def _extract_retry_after_seconds(message: str) -> int | None:
+        match = _RETRY_IN_MIN_SEC_PATTERN.search(message)
+        if match:
+            minutes = int(match.group(1))
+            seconds = float(match.group(2))
+            return max(1, int(minutes * 60 + seconds))
+        match = _RETRY_AFTER_SECONDS_PATTERN.search(message)
+        if match:
+            return max(1, int(match.group(1)))
+        return None
+
+    @staticmethod
+    def _extract_http_status_code(exc: BaseException) -> int | None:
+        status_code = getattr(exc, "status_code", None)
+        if isinstance(status_code, int):
+            return status_code
+        response = getattr(exc, "response", None)
+        response_status = getattr(response, "status_code", None) if response is not None else None
+        if isinstance(response_status, int):
+            return response_status
+        match = re.search(r"\berror code:\s*(\d{3})\b", str(exc), re.IGNORECASE)
+        if match:
+            return int(match.group(1))
+        return None
+
+    def _build_transient_llm_error_reply(self, exc: BaseException) -> str:
+        message = str(exc)
+        status_code = self._extract_http_status_code(exc)
+        retry_after = self._extract_retry_after_seconds(message)
+        if status_code == 429:
+            if retry_after is not None:
+                return (
+                    "I'm temporarily rate-limited by the model provider. "
+                    f"Please retry in about {retry_after} seconds."
+                )
+            return "I'm temporarily rate-limited by the model provider. Please retry in a bit."
+        if status_code in {502, 503, 504}:
+            return (
+                "I'm having temporary trouble reaching the model provider right now. "
+                "Please retry in a moment."
+            )
+        return "I am here with you. I hit a temporary issue generating a full reply."
+
+    def _invoke_llm_with_fallback(self, messages: list[Any], user_id: int) -> tuple[str, bool]:
+        response_obj = self._llm.invoke(messages)
+        response_text = (response_obj.content or "").strip() if response_obj else ""
+        if response_text:
+            return response_text, False
+
+        primary_error = ValueError("Primary LLM returned an empty response.")
+        if self._fallback_llm:
+            try:
+                fallback_obj = self._fallback_llm.invoke(messages)
+                fallback_text = (fallback_obj.content or "").strip() if fallback_obj else ""
+                if fallback_text:
+                    logger.warning(
+                        "Primary LLM provider '%s' returned empty output; using fallback '%s' for user %s.",
+                        self._llm_provider,
+                        self._fallback_provider,
+                        user_id,
+                    )
+                    return fallback_text, True
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "Fallback provider '%s' failed after empty output from primary '%s' for user %s: %s",
+                    self._fallback_provider,
+                    self._llm_provider,
+                    user_id,
+                    exc,
+                )
+        raise primary_error
+
+    def _generate_response_with_failover(self, messages: list[Any], user_id: int) -> tuple[str, bool]:
+        try:
+            return self._invoke_llm_with_fallback(messages, user_id)
+        except Exception as primary_exc:  # noqa: BLE001
+            status_code = self._extract_http_status_code(primary_exc)
+            if status_code in {502, 503} and self._fallback_llm:
+                logger.warning(
+                    "Primary LLM provider '%s' failed with status %s; retrying with fallback '%s' for user %s.",
+                    self._llm_provider,
+                    status_code,
+                    self._fallback_provider,
+                    user_id,
+                )
+                try:
+                    fallback_obj = self._fallback_llm.invoke(messages)
+                    fallback_text = (fallback_obj.content or "").strip() if fallback_obj else ""
+                    if fallback_text:
+                        self._decision_logger.log(
+                            event_type="llm_failover",
+                            summary="Primary LLM provider failed; fallback provider served response",
+                            user_id=str(user_id),
+                            source="telegram",
+                            details={
+                                "primary_provider": self._llm_provider,
+                                "fallback_provider": self._fallback_provider,
+                                "status_code": status_code,
+                            },
+                        )
+                        return fallback_text, True
+                    raise ValueError("Fallback LLM returned an empty response.")
+                except Exception as fallback_exc:  # noqa: BLE001
+                    logger.exception(
+                        "Fallback LLM provider '%s' also failed for user %s after primary status %s: %s",
+                        self._fallback_provider,
+                        user_id,
+                        status_code,
+                        fallback_exc,
+                    )
+            raise primary_exc
+
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not update.message or not update.effective_user:
             return
@@ -956,24 +1097,23 @@ class MessageHandlers:
         live_context = self._build_live_context(message)
         prompt = self._build_reply_prompt(str(user_id), message, user_context, group_context, memories, live_context)
 
+        llm_messages = [
+            SystemMessage(
+                content=(
+                    "You are HER. Warm, empathetic, practical, concise. "
+                    "Be truthful about runtime capabilities. "
+                    "If live context indicates internet capability is available or includes fresh web results, "
+                    "do not claim you have no internet access."
+                )
+            ),
+            HumanMessage(content=prompt),
+        ]
+        used_fallback = False
         try:
-            response_obj = self._llm.invoke(
-                [
-                    SystemMessage(
-                        content=(
-                            "You are HER. Warm, empathetic, practical, concise. "
-                            "Be truthful about runtime capabilities. "
-                            "If live context indicates internet capability is available or includes fresh web results, "
-                            "do not claim you have no internet access."
-                        )
-                    ),
-                    HumanMessage(content=prompt),
-                ]
-            )
-            response = (response_obj.content or "").strip() if response_obj else ""
+            response, used_fallback = self._generate_response_with_failover(llm_messages, user_id)
         except Exception as exc:  # noqa: BLE001
             logger.exception("Failed to generate response for user %s: %s", user_id, exc)
-            response = "I am here with you — I had a temporary issue generating a full reply."
+            response = self._build_transient_llm_error_reply(exc)
 
         if not response:
             response = "I am here with you. Tell me a little more and I will help."
@@ -987,6 +1127,12 @@ class MessageHandlers:
         proactive_hint = self._maybe_recurring_suggestion(message)
         if proactive_hint and proactive_hint.lower() not in response.lower():
             response = f"{response}\n\n{proactive_hint}"
+        if used_fallback:
+            logger.info(
+                "LLM response for user %s served via fallback provider '%s'.",
+                user_id,
+                self._fallback_provider,
+            )
 
         self.memory.update_context(str(user_id), response, "assistant")
         if is_group:

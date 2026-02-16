@@ -260,6 +260,32 @@ Expected:
 - If file tool is available to the active path, reply includes file summary.
 - If unavailable, bot should fail gracefully and continue responding.
 
+### 6.4 Sandbox penetration/network tool availability
+
+Run:
+
+```bash
+docker compose exec sandbox check_pentest_tools
+```
+
+Expected:
+- Command exits with code `0`.
+- Output includes: `All required penetration/network tools are available.`
+- Output shows versions for tools such as `nmap`, `openssl`, `curl`, and `dig`.
+
+### 6.5 Telegram sandbox scan execution path
+
+Send:
+
+```text
+Run a basic port scan summary for vaheed.net
+```
+
+Expected:
+- Bot does not answer with "I can't run scans/tools" when sandbox capability is available.
+- Bot returns a sandbox execution summary (success/failure, findings/errors, execution time).
+- Dashboard `Executors` page shows a new sandbox execution record.
+
 ---
 
 ## 7) Validate dashboard visibility

@@ -236,6 +236,9 @@ curl http://localhost:8000
 # View logs
 docker compose logs -f her-bot
 
+# Verify sandbox penetration/network tools
+docker compose exec sandbox check_pentest_tools
+
 # Access dashboard
 open http://localhost:8501
 ```

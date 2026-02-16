@@ -306,6 +306,34 @@ def parse_execs(execs: list[str]) -> pd.DataFrame:
     return df
 
 
+def parse_execs_from_decisions(decision_rows: list[str]) -> pd.DataFrame:
+    rows: list[dict[str, Any]] = []
+    for raw in decision_rows:
+        payload = safe_json(raw)
+        if str(payload.get("event_type", "")) != "sandbox_execution":
+            continue
+        details = payload.get("details")
+        if not isinstance(details, dict):
+            continue
+        ts = parse_ts(details.get("timestamp") or payload.get("timestamp"))
+        rows.append(
+            {
+                "timestamp": ts,
+                "command": str(details.get("command", "")),
+                "success": bool(details.get("success", False)),
+                "exit_code": details.get("exit_code"),
+                "execution_time": float(details.get("execution_time", 0.0) or 0.0),
+                "error": str(details.get("error", "")),
+                "output": str(details.get("output", "")),
+                "workdir": str(details.get("workdir", "/workspace")),
+            }
+        )
+    df = pd.DataFrame(rows)
+    if not df.empty:
+        df = df[df["timestamp"].notna()].sort_values("timestamp")
+    return df
+
+
 def parse_decisions(decision_rows: list[str]) -> pd.DataFrame:
     rows: list[dict[str, Any]] = []
     for raw in decision_rows:
@@ -734,6 +762,8 @@ logs_df = parse_logs(metrics.get("logs", []))
 exec_df = parse_execs(metrics.get("sandbox_executions", []))
 jobs_df = pd.DataFrame([safe_json(row) for row in metrics.get("scheduled_jobs", [])])
 decision_df = parse_decisions(metrics.get("decision_logs", []))
+if exec_df.empty:
+    exec_df = parse_execs_from_decisions(metrics.get("decision_logs", []))
 
 if page == "Overview":
     st.title("Overview Dashboard")

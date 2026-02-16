@@ -784,8 +784,18 @@ class TaskScheduler:
         context: dict[str, Any],
     ) -> str:
         if "when" in step:
-            if not bool(self._safe_eval(str(step.get("when", "True")), context)):
-                return "step skipped (when=false)"
+            when_expr = str(step.get("when", "True"))
+            try:
+                if not bool(self._safe_eval(when_expr, context)):
+                    return "step skipped (when=false)"
+            except NameError as exc:
+                logger.warning(
+                    "Workflow task '%s' step skipped due to undefined name in when='%s': %s",
+                    task.get("name", "unknown"),
+                    when_expr,
+                    exc,
+                )
+                return "step skipped (when=undefined name)"
 
         action = str(step.get("action", "")).strip().lower()
         if not action:
@@ -807,7 +817,17 @@ class TaskScheduler:
             if not key:
                 return "set failed: missing key"
             if "expr" in step:
-                value = self._safe_eval(str(step.get("expr", "")), context)
+                expr = str(step.get("expr", ""))
+                try:
+                    value = self._safe_eval(expr, context)
+                except NameError as exc:
+                    logger.warning(
+                        "Workflow task '%s' set failed due to undefined name in expr='%s': %s",
+                        task.get("name", "unknown"),
+                        expr,
+                        exc,
+                    )
+                    return "set failed: undefined name in expr"
             else:
                 value = step.get("value")
             context[key] = value
@@ -821,7 +841,17 @@ class TaskScheduler:
             if not isinstance(state, dict):
                 return "set_state failed: state unavailable"
             if "expr" in step:
-                value = self._safe_eval(str(step.get("expr", "")), context)
+                expr = str(step.get("expr", ""))
+                try:
+                    value = self._safe_eval(expr, context)
+                except NameError as exc:
+                    logger.warning(
+                        "Workflow task '%s' set_state failed due to undefined name in expr='%s': %s",
+                        task.get("name", "unknown"),
+                        expr,
+                        exc,
+                    )
+                    return "set_state failed: undefined name in expr"
             else:
                 value = step.get("value")
             state[key] = value
@@ -842,7 +872,17 @@ class TaskScheduler:
                 return "webhook failed: missing url"
             payload: Any
             if "payload_expr" in step:
-                payload = self._safe_eval(str(step.get("payload_expr", "")), context)
+                payload_expr = str(step.get("payload_expr", ""))
+                try:
+                    payload = self._safe_eval(payload_expr, context)
+                except NameError as exc:
+                    logger.warning(
+                        "Workflow task '%s' webhook failed due to undefined name in payload_expr='%s': %s",
+                        task.get("name", "unknown"),
+                        payload_expr,
+                        exc,
+                    )
+                    return "webhook failed: undefined name in payload_expr"
             else:
                 payload = step.get("payload", {})
             request = Request(
@@ -889,8 +929,17 @@ class TaskScheduler:
                 context["source"] = source_data
 
         condition = str(task.get("condition_expr", "True")).strip() or "True"
-        if not bool(self._safe_eval(condition, context)):
-            return "condition=false"
+        try:
+            if not bool(self._safe_eval(condition, context)):
+                return "condition=false"
+        except NameError as exc:
+            logger.warning(
+                "Workflow task '%s' condition evaluated false due to undefined name in condition_expr='%s': %s",
+                task.get("name", "unknown"),
+                condition,
+                exc,
+            )
+            return "condition=false (undefined name)"
 
         outputs: list[str] = []
         for raw_step in steps:

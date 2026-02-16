@@ -14,11 +14,14 @@ import json
 import logging
 import os
 import time
+from datetime import datetime, timezone
 from typing import Any
 
 from langchain_core.tools import BaseTool
+from utils.decision_log import DecisionLogger
 
 logger = logging.getLogger(__name__)
+_decision_logger = DecisionLogger()
 
 
 class SandboxExecutor:
@@ -117,6 +120,25 @@ class SandboxExecutor:
 
     def _log_execution(self, command: str, result: dict[str, Any], user: str, workdir: str):
         """Log execution to Redis metrics if available."""
+        payload = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "command": command,
+            "success": result["success"],
+            "output": result.get("output", ""),
+            "error": result.get("error", ""),
+            "exit_code": result.get("exit_code", -1),
+            "execution_time": result.get("execution_time", 0),
+            "user": user,
+            "workdir": workdir,
+        }
+
+        _decision_logger.log(
+            event_type="sandbox_execution",
+            summary=f"Sandbox command {'succeeded' if bool(result.get('success')) else 'failed'}",
+            source="sandbox_tools",
+            details=payload,
+        )
+
         try:
             import redis
             redis_host = os.getenv("REDIS_HOST", "redis")
@@ -130,26 +152,10 @@ class SandboxExecutor:
                 decode_responses=True,
             )
 
-            import json
-            from datetime import datetime, timezone
-
-            payload = {
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "command": command,
-                "success": result["success"],
-                "output": result.get("output", ""),
-                "error": result.get("error", ""),
-                "exit_code": result.get("exit_code", -1),
-                "execution_time": result.get("execution_time", 0),
-                "user": user,
-                "workdir": workdir,
-            }
-
             redis_client.lpush("her:sandbox:executions", json.dumps(payload))
             redis_client.ltrim("her:sandbox:executions", 0, 99)
-        except Exception:  # noqa: BLE001
-            # Silently fail if Redis not available
-            pass
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Failed to write sandbox execution log to Redis: %s", exc)
 
     def execute_python(
         self,

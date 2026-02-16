@@ -13,6 +13,7 @@ from telegram.error import NetworkError, TimedOut
 from telegram.ext import ContextTypes
 
 from agents.personality_agent import PersonalityAgent
+from her_mcp.sandbox_tools import SandboxNetworkTool, SandboxSecurityScanTool
 from her_mcp.tools import CurlWebSearchTool
 from her_telegram.keyboards import get_admin_menu, get_personality_adjustment
 from her_telegram.rate_limiter import RateLimiter
@@ -35,6 +36,7 @@ _IN_INTERVAL_PATTERN = re.compile(
     r"\b(?:in|after)\s+(\d+)\s*(m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days)\b",
     re.IGNORECASE,
 )
+_HOST_PATTERN = re.compile(r"\b(?:https?://)?([a-z0-9][a-z0-9.-]+\.[a-z]{2,})\b", re.IGNORECASE)
 _WEEKDAY_TO_INDEX = {
     "monday": 0,
     "tuesday": 1,
@@ -600,6 +602,113 @@ class MessageHandlers:
 
         return None
 
+    @staticmethod
+    def _wants_utc_timestamp(message: str) -> bool:
+        lower_msg = message.lower()
+        explicit_phrases = {
+            "utc time",
+            "time in utc",
+            "utc timestamp",
+            "timestamp utc",
+            "tell me utc",
+            "include utc time",
+        }
+        if any(phrase in lower_msg for phrase in explicit_phrases):
+            return True
+        return "utc" in lower_msg and ("time" in lower_msg or "timestamp" in lower_msg)
+
+    def _format_current_utc_line(self) -> str:
+        now_utc = self._fetch_online_utc_now() or datetime.now(UTC)
+        return f"Timestamp (UTC): {now_utc.strftime('%Y-%m-%d %H:%M:%S')}"
+
+    @staticmethod
+    def _extract_scan_target(message: str) -> str | None:
+        match = _HOST_PATTERN.search(message)
+        if not match:
+            return None
+        return match.group(1).strip().lower()
+
+    def _sandbox_capability(self) -> tuple[bool, str]:
+        caps = self._get_runtime_capabilities()
+        sandbox = (caps.get("capabilities", {}) or {}).get("sandbox", {}) if caps else {}
+        available = bool(sandbox.get("available"))
+        reason = str(sandbox.get("reason", "unknown"))
+        return available, reason
+
+    def _maybe_answer_sandbox_security_query(self, message: str) -> str | None:
+        lower_msg = message.lower()
+        is_scan_intent = any(
+            token in lower_msg
+            for token in {
+                "port scan",
+                "nmap",
+                "security scan",
+                "scan host",
+                "scan website",
+                "dns lookup",
+                "traceroute",
+                "ssl",
+                "certificate",
+            }
+        )
+        if not is_scan_intent:
+            return None
+
+        target = self._extract_scan_target(message)
+        if not target:
+            return "Please provide a host or domain to scan (example: vaheed.net)."
+
+        sandbox_ok, sandbox_reason = self._sandbox_capability()
+        if not sandbox_ok:
+            return (
+                "Sandbox security tools are currently unavailable, so I cannot run the scan now.\n"
+                f"Reason: {sandbox_reason}"
+            )
+
+        container_name = os.getenv("SANDBOX_CONTAINER_NAME", "her-sandbox")
+        try:
+            if "port scan" in lower_msg or "nmap" in lower_msg:
+                result = SandboxNetworkTool(container_name=container_name)._run(
+                    target=target,
+                    action="port_scan",
+                    ports="1-1024",
+                    timeout=60,
+                )
+                return f"Port scan summary for {target}:\n{result}"
+            if "dns" in lower_msg:
+                result = SandboxNetworkTool(container_name=container_name)._run(
+                    target=target,
+                    action="dns",
+                    timeout=45,
+                )
+                return f"DNS lookup summary for {target}:\n{result}"
+            if "traceroute" in lower_msg:
+                result = SandboxNetworkTool(container_name=container_name)._run(
+                    target=target,
+                    action="traceroute",
+                    timeout=60,
+                )
+                return f"Traceroute summary for {target}:\n{result}"
+            if "ssl" in lower_msg or "certificate" in lower_msg:
+                result = SandboxNetworkTool(container_name=container_name)._run(
+                    target=target,
+                    action="ssl",
+                    timeout=60,
+                )
+                return f"SSL/TLS summary for {target}:\n{result}"
+
+            # Default security baseline scan.
+            mode = "website" if message.lower().find("http://") != -1 or message.lower().find("https://") != -1 else "host"
+            result = SandboxSecurityScanTool(container_name=container_name)._run(
+                target=target,
+                mode=mode,
+                timeout=90,
+            )
+            return f"Security scan summary for {target}:\n{result}"
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Sandbox security query failed for target '%s': %s", target, exc)
+            return f"Sandbox scan failed for {target}: {exc}"
+
     def _is_group_chat(self, update: Update) -> bool:
         chat_type = (update.effective_chat.type or "") if update.effective_chat else ""
         return chat_type in {"group", "supergroup"}
@@ -948,6 +1057,10 @@ class MessageHandlers:
             "- Keep task safe and minimal.\n"
             "- For one-time reminders like 'in 5 minutes', provide run_at using current UTC time.\n"
             "- For thresholds/automation conditions, use type=workflow with steps.\n"
+            "- In workflow expressions (when/expr/condition_expr), reference only defined names: "
+            "source, state, task, task_name, now_utc, or keys set by earlier steps.\n"
+            "- For 'rises X% from current price' requests, store the baseline in state and compare "
+            "current values against state baseline using state.get(...).\n"
             f"User message: {message}"
         )
 
@@ -1447,6 +1560,7 @@ class MessageHandlers:
         message = (update.message.text or "").strip()
         if not message:
             return
+        wants_utc_stamp = self._wants_utc_timestamp(message)
         previous_context = self.memory.get_context(str(user_id))
         previous_assistant_message = self._last_assistant_message(previous_context)
 
@@ -1485,6 +1599,8 @@ class MessageHandlers:
 
         auto_schedule_reply = self._maybe_schedule_from_message(message, user_id)
         if auto_schedule_reply:
+            if wants_utc_stamp and "Timestamp (UTC):" not in auto_schedule_reply:
+                auto_schedule_reply = f"{auto_schedule_reply}\n{self._format_current_utc_line()}"
             self.memory.update_context(str(user_id), auto_schedule_reply, "assistant")
             if is_group:
                 self.memory.update_context(group_key, f"HER: {auto_schedule_reply}", "assistant", max_messages=120)
@@ -1501,6 +1617,8 @@ class MessageHandlers:
 
         realtime_response = self._maybe_answer_realtime_query(message)
         if realtime_response:
+            if wants_utc_stamp and "Timestamp (UTC):" not in realtime_response:
+                realtime_response = f"{realtime_response}\n{self._format_current_utc_line()}"
             self.memory.update_context(str(user_id), realtime_response, "assistant")
             if is_group:
                 self.memory.update_context(group_key, f"HER: {realtime_response}", "assistant", max_messages=120)
@@ -1508,6 +1626,19 @@ class MessageHandlers:
                 self._metrics.record_interaction(str(user_id), message, realtime_response)
             self._record_reinforcement(str(user_id), message, realtime_response, task_succeeded=True)
             await self._reply(update, realtime_response)
+            return
+
+        sandbox_security_response = self._maybe_answer_sandbox_security_query(message)
+        if sandbox_security_response:
+            if wants_utc_stamp and "Timestamp (UTC):" not in sandbox_security_response:
+                sandbox_security_response = f"{sandbox_security_response}\n{self._format_current_utc_line()}"
+            self.memory.update_context(str(user_id), sandbox_security_response, "assistant")
+            if is_group:
+                self.memory.update_context(group_key, f"HER: {sandbox_security_response}", "assistant", max_messages=120)
+            if self._metrics:
+                self._metrics.record_interaction(str(user_id), message, sandbox_security_response)
+            self._record_reinforcement(str(user_id), message, sandbox_security_response, task_succeeded=True)
+            await self._reply(update, sandbox_security_response)
             return
 
         memories = self.memory.search_memories(str(user_id), message, limit=5)
@@ -1550,6 +1681,8 @@ class MessageHandlers:
         proactive_hint = self._maybe_recurring_suggestion(message)
         if proactive_hint and proactive_hint.lower() not in response.lower():
             response = f"{response}\n\n{proactive_hint}"
+        if wants_utc_stamp and "Timestamp (UTC):" not in response and "Right now (UTC):" not in response:
+            response = f"{response}\n\n{self._format_current_utc_line()}"
         if used_fallback:
             logger.info(
                 "LLM response for user %s served via fallback provider '%s'.",

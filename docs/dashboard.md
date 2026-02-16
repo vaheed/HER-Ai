@@ -105,6 +105,7 @@ TZ=UTC
 - `her:metrics:last_response` - Most recent response data
 - `her:logs` - System logs (last 200)
 - `her:sandbox:executions` - Sandbox execution history (last 100)
+- `her:decision:logs` with `event_type=sandbox_execution` - Fallback sandbox execution feed when direct list entries are unavailable
 - `her:scheduler:jobs` - Scheduled job history (last 100)
 - `her:scheduler:state` - Scheduler runtime state and upcoming jobs
 - `her:decision:logs` - Runtime decision log feed (last 500)

@@ -203,6 +203,9 @@ def test_scheduler_supports_runtime_updates_and_persistence() -> None:
     assert "summarize_recent_patterns" in source
     assert "her:scheduler:tasks_override" in source
     assert "Loaded %s scheduler tasks from Redis override" in source
+    assert "step skipped (when=undefined name)" in source
+    assert "condition=false (undefined name)" in source
+    assert "set failed: undefined name in expr" in source
 
 
 def test_mcp_profile_path_is_configurable_via_env() -> None:
@@ -242,6 +245,13 @@ def test_telegram_registers_schedule_admin_command() -> None:
     assert "def _interval_unit_to_base" in handlers_source
     assert "def _parse_schedule_request_with_llm" in handlers_source
     assert "Return strict JSON only" in handlers_source
+    assert "reference only defined names" in handlers_source
+    assert "def _wants_utc_timestamp" in handlers_source
+    assert "def _maybe_answer_sandbox_security_query" in handlers_source
+    assert "SandboxNetworkTool" in handlers_source
+    assert "Port scan summary for" in handlers_source
+    assert "Timestamp (UTC):" in handlers_source
+    assert "wants_utc_stamp" in handlers_source
     assert "self._parse_schedule_request_with_llm(message, user_id)" in handlers_source
 
 
@@ -263,6 +273,8 @@ def test_dashboard_handles_mem0_schema_and_recent_chats() -> None:
     assert 'scan_iter(match="her:context:*"' in source
     assert "her:scheduler:state" in source
     assert "her:decision:logs" in source
+    assert "parse_execs_from_decisions" in source
+    assert 'if str(payload.get("event_type", "")) != "sandbox_execution"' in source
     assert "Upcoming Jobs" in source
     assert "Behind The Chat: Reasoning / Tool Trace" in source
     assert "\"tool_call\"" in source
@@ -284,6 +296,8 @@ def test_sandbox_security_and_network_tools_are_registered() -> None:
 
     assert "class SandboxNetworkTool" in sandbox_source
     assert "class SandboxSecurityScanTool" in sandbox_source
+    assert "event_type=\"sandbox_execution\"" in sandbox_source
+    assert "Failed to write sandbox execution log to Redis" in sandbox_source
     assert "SandboxNetworkTool" in tools_source
     assert "SandboxSecurityScanTool" in tools_source
 
@@ -292,6 +306,7 @@ def test_sandbox_container_emits_startup_ready_log() -> None:
     source = Path("sandbox/Dockerfile").read_text()
     assert "[sandbox] Ready:" in source
     assert "tail -f /dev/null" in source
+    assert "check_pentest_tools" in source
 
 
 def test_sitecustomize_filters_known_pydantic_transition_warnings() -> None:

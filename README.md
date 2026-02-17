@@ -317,11 +317,21 @@ Developer workflow: `docs/developer-guidelines.md`
 
 ## License
 
-MIT License.
+MIT License - see [LICENSE](LICENSE) for details.
 
-## Support and Resources
+## 🙏 Acknowledgments
 
-- Documentation: https://vaheed.github.io/HER-Ai/
-- Repository: https://github.com/vaheed/HER-Ai
-- Issues: https://github.com/vaheed/HER-Ai/issues
-- Discussions: https://github.com/vaheed/HER-Ai/discussions
+- Inspired by the movie "HER" (2013) and its vision of emotionally aware human-AI interaction.
+- Built with CrewAI, Mem0, PostgreSQL/pgvector, Redis, and the open-source ecosystem.
+- Thanks to all contributors, maintainers, and the MCP community for tools, feedback, and improvements.
+
+## 📞 Support & Resources
+
+- **Documentation**: https://vaheed.github.io/HER-Ai/
+- **GitHub Repository**: https://github.com/vaheed/HER-Ai
+- **Issues**: [GitHub Issues](https://github.com/vaheed/HER-Ai/issues) for bug reports and feature requests
+- **Discussions**: [GitHub Discussions](https://github.com/vaheed/HER-Ai/discussions) for ideas, Q&A, and roadmap conversations
+
+---
+
+**Made with ❤️ by developers who believe AI should be warm, not cold**

@@ -916,6 +916,7 @@ Every inbound Telegram message now passes through a single LLM interpreter befor
 [UnifiedRequestInterpreter]
   - Detect language
   - Normalize intent
+  - Apply execution-first operator mindset
   - Emit one envelope:
       * SCHEDULE {task_json}
       * SANDBOX <shell_command>

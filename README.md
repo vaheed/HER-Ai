@@ -92,6 +92,7 @@ docker compose logs -f her-bot
 - **Public Mode**: User interactions, approval-based features
 - **Natural Scheduling**: Users can request reminders/jobs in plain language (no `/schedule` syntax required)
 - **Unified Request Interpreter**: Every message is routed through an LLM interpreter that detects language and emits executable `SCHEDULE {...}` or `SANDBOX ...` commands
+- **Operator-Style Prompting**: HER is prompted to turn actionable requests into objectives, propose steps, provide exact commands/code, and adapt on failures
 - **Example Library**: `/example` command plus 60+ ready prompts in docs for fast onboarding
 
 ### 📊 Real-Time Dashboard

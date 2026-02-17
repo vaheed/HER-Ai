@@ -905,29 +905,38 @@ api_keys:
                     [PostgreSQL - Personality State]
 ```
 
-### Unified Interpreter Routing (Multilingual)
+### Autonomous Sandbox Routing (Multilingual + Continuous Context)
 
-Every inbound Telegram message now passes through a single LLM interpreter before fallback chat logic:
+Every inbound Telegram message is processed with language alignment and full context continuity:
 
 ```
 [User Message]
       |
       v
-[UnifiedRequestInterpreter]
-  - Detect language
-  - Normalize intent
-  - Apply execution-first operator mindset
-  - Emit one envelope:
-      * SCHEDULE {task_json}
-      * SANDBOX <shell_command>
-      * NONE
+[Language Detection]
+  - Detect language of latest message
+  - Switch response language immediately if user switches
       |
       v
-[Handlers Parser + Executor]
-  - Parse envelope
-  - Validate schema/safety
-  - Execute scheduler or sandbox
-  - Persist decision logs
+[Context-Continuous Intent Handling]
+  - Send full conversation history to LLM
+  - Extract multi-intent scheduling tasks sequentially
+  - Treat short follow-ups (for example: "call Ali") as new actionable tasks
+      |
+      v
+[AutonomousSandboxOperator]
+  - Strict JSON actions only:
+      * {"command":"...", "background": false}
+      * {"write_to":"/absolute/path", "code":"..."}
+      * {"done": true, "result":"..."}
+  - Invalid JSON is rejected and retried
+  - Command output is fed back into loop until done
+      |
+      v
+[Scheduler + Sandbox Executors]
+  - Scheduler confirmations are language-aware and time-explicit
+  - Sandbox commands enforce timeout + CPU/memory limits
+  - Decision logs and metrics persisted
 ```
 
 ### Memory Lifecycle

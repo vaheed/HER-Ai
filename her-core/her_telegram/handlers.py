@@ -887,6 +887,220 @@ class MessageHandlers:
     def _normalize_weekdays_input(raw: Any) -> list[int]:
         return normalize_weekdays_input(raw)
 
+    @staticmethod
+    def _history_for_llm(context_rows: list[dict[str, Any]], limit: int = 200) -> str:
+        rows = context_rows[-max(1, int(limit)) :]
+        lines: list[str] = []
+        for row in rows:
+            role = str(row.get("role", "user"))
+            message = str(row.get("message", "")).strip()
+            if message:
+                lines.append(f"{role}: {message}")
+        return "\n".join(lines) if lines else "(none)"
+
+    @staticmethod
+    def _detect_language_heuristic(message: str) -> str:
+        text = message.strip()
+        if not text:
+            return "en"
+        if re.search(r"[\u0600-\u06FF]", text):
+            return "fa"
+        if re.search(r"[\u4E00-\u9FFF]", text):
+            return "zh"
+        if re.search(r"[\u3040-\u30FF]", text):
+            return "ja"
+        if re.search(r"[\uAC00-\uD7AF]", text):
+            return "ko"
+        if re.search(r"[\u0400-\u04FF]", text):
+            return "ru"
+        if re.search(r"[ñáéíóúü¿¡]", text.lower()):
+            return "es"
+        return "en"
+
+    def _detect_user_language(self, message: str, user_id: int, context_rows: list[dict[str, Any]]) -> str:
+        history_text = self._history_for_llm(context_rows, limit=60)
+        prompt = (
+            "Detect the language of the latest user message.\n"
+            "Return JSON only:\n"
+            '{ "language": "ISO-639-1 code" }\n'
+            "Use recent context only to resolve ambiguous short text.\n\n"
+            f"Conversation history:\n{history_text}\n\n"
+            f"Latest user message:\n{message}"
+        )
+        llm_messages = [
+            SystemMessage(content="You are a language detector. Return strict JSON only."),
+            HumanMessage(content=prompt),
+        ]
+        try:
+            response_text, _ = self._generate_response_with_failover(llm_messages, user_id)
+            payload = self._extract_json_object(response_text)
+            language = str((payload or {}).get("language", "")).strip().lower()
+            if re.match(r"^[a-z]{2}$", language):
+                return language
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Language detection via LLM failed for user %s: %s", user_id, exc)
+        return self._detect_language_heuristic(message)
+
+    def _build_scheduler_confirmation(
+        self,
+        user_id: int,
+        language: str,
+        original_request: str,
+        task: dict[str, Any],
+        context_rows: list[dict[str, Any]],
+    ) -> str:
+        time_reference = "unspecified time"
+        if str(task.get("interval", "")).lower() == "once":
+            run_at = str(task.get("run_at", "")).strip()
+            if run_at:
+                time_reference = run_at
+        elif task.get("at"):
+            tz = str(task.get("timezone", "UTC")).strip() or "UTC"
+            time_reference = f"{task.get('at')} ({tz})"
+        else:
+            time_reference = str(task.get("interval", "scheduled")).replace("_", " ")
+
+        history_text = self._history_for_llm(context_rows, limit=80)
+        prompt = (
+            "Write one natural scheduler confirmation sentence.\n"
+            "Rules:\n"
+            f"- Language must be: {language}\n"
+            "- Mention the original user request naturally.\n"
+            "- Include a clear time reference.\n"
+            "- Keep conversational continuity with recent history.\n"
+            "- No markdown.\n\n"
+            f"Recent conversation:\n{history_text}\n\n"
+            f"Original request: {original_request}\n"
+            f"Task name: {task.get('name', '')}\n"
+            f"Task type: {task.get('type', 'reminder')}\n"
+            f"Time reference: {time_reference}"
+        )
+        llm_messages = [
+            SystemMessage(content="You generate short scheduling confirmations. Return plain text only."),
+            HumanMessage(content=prompt),
+        ]
+        try:
+            response_text, _ = self._generate_response_with_failover(llm_messages, user_id)
+            confirmation = str(response_text or "").strip()
+            if confirmation:
+                return f"✅ {confirmation}"
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Failed to generate localized scheduler confirmation for user %s: %s", user_id, exc)
+        fallback_prompt = (
+            "Translate this short confirmation to language code "
+            f"{language} and keep the same meaning.\n"
+            "Return plain text only.\n"
+            f"Text: Scheduled your request for {time_reference}."
+        )
+        try:
+            response_text, _ = self._generate_response_with_failover(
+                [
+                    SystemMessage(content="You are a translator."),
+                    HumanMessage(content=fallback_prompt),
+                ],
+                user_id,
+            )
+            translated = str(response_text or "").strip()
+            if translated:
+                return f"✅ {translated}"
+        except Exception:  # noqa: BLE001
+            pass
+        return f"✅ Scheduled your request for {time_reference}."
+
+    def _render_in_user_language(self, user_id: int, language: str, text: str) -> str:
+        prompt = (
+            f"Rewrite the following text in language code {language}.\n"
+            "Keep meaning and tone, return plain text only.\n"
+            f"Text: {text}"
+        )
+        try:
+            response_text, _ = self._generate_response_with_failover(
+                [
+                    SystemMessage(content="You are a translator and rewriter."),
+                    HumanMessage(content=prompt),
+                ],
+                user_id,
+            )
+            rewritten = str(response_text or "").strip()
+            if rewritten:
+                return rewritten
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Language rendering failed for user %s: %s", user_id, exc)
+        return text
+
+    def _parse_multi_intent_schedule_with_llm(
+        self,
+        message: str,
+        user_id: int,
+        language: str,
+        context_rows: list[dict[str, Any]],
+    ) -> tuple[list[dict[str, Any]], str]:
+        if not self.scheduler:
+            return [], message
+
+        now_utc = datetime.now(UTC)
+        history_text = self._history_for_llm(context_rows, limit=200)
+        prompt = (
+            "Analyze the latest user message with full conversation context.\n"
+            "Extract ALL scheduling/reminder/workflow intents sequentially.\n"
+            "If message is a short follow-up command after prior planning/scheduling (example: 'call Ali'), "
+            "treat it as a new actionable scheduling task.\n"
+            "Return JSON only:\n"
+            "{\n"
+            '  "tasks": [\n'
+            "    {\n"
+            '      "name": "optional",\n'
+            '      "type": "reminder|workflow|custom",\n'
+            '      "interval": "once|hourly|daily|weekly|every_<N>_minutes|every_<N>_hours|every_<N>_days",\n'
+            '      "run_at": "ISO8601 optional",\n'
+            '      "at": "HH:MM optional",\n'
+            '      "timezone": "IANA timezone optional",\n'
+            '      "weekdays": [0-6 optional],\n'
+            '      "message": "reminder message optional",\n'
+            '      "notify_user_id": 0,\n'
+            '      "max_retries": 2,\n'
+            '      "retry_delay_seconds": 30,\n'
+            '      "steps": []\n'
+            "    }\n"
+            "  ],\n"
+            '  "remaining_request": "non-scheduling remainder or empty string"\n'
+            "}\n"
+            "Rules:\n"
+            f"- Response language context is {language}.\n"
+            "- Keep tasks in user-intended order.\n"
+            "- For short imperative follow-ups with no time, default to once with run_at ~5 minutes from now.\n"
+            "- If the whole message is scheduling, set remaining_request to empty string.\n\n"
+            f"Current UTC time: {now_utc.isoformat()}\n"
+            f"Conversation history:\n{history_text}\n\n"
+            f"Latest user message:\n{message}"
+        )
+        llm_messages = [
+            SystemMessage(content="You are a deterministic scheduler intent extractor. Return JSON only."),
+            HumanMessage(content=prompt),
+        ]
+        try:
+            response_text, _ = self._generate_response_with_failover(llm_messages, user_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Multi-intent schedule parser unavailable for user %s: %s", user_id, exc)
+            return [], message
+
+        payload = self._extract_json_object(response_text)
+        if not payload:
+            return [], message
+
+        raw_tasks = payload.get("tasks")
+        remaining_request = str(payload.get("remaining_request", message)).strip()
+        if not isinstance(raw_tasks, list):
+            return [], message
+
+        normalized_tasks: list[dict[str, Any]] = []
+        for raw_task in raw_tasks:
+            task = self._normalize_ai_schedule_task(raw_task, user_id, message, now_utc)
+            if task:
+                normalized_tasks.append(task)
+
+        return normalized_tasks, remaining_request
+
     def _normalize_ai_schedule_task(
         self,
         task: Any,
@@ -1651,15 +1865,18 @@ class MessageHandlers:
         message = (update.message.text or "").strip()
         if not message:
             return
-        wants_utc_stamp = self._wants_utc_timestamp(message)
         previous_context = self.memory.get_context(str(user_id))
         previous_assistant_message = self._last_assistant_message(previous_context)
 
         is_group = self._is_group_chat(update)
         group_key = self._group_memory_key(chat_id)
+        user_language = self._detect_user_language(message, user_id, previous_context)
 
         if not self.is_admin(user_id) and not self.rate_limiter.is_allowed(user_id):
-            await self._reply(update, "⏱️ Please slow down a bit!")
+            await self._reply(
+                update,
+                self._render_in_user_language(user_id, user_language, "⏱️ Please slow down a bit!"),
+            )
             return
 
         self.memory.update_context(str(user_id), message, "user")
@@ -1693,12 +1910,78 @@ class MessageHandlers:
         except (TimedOut, NetworkError) as exc:
             logger.warning("Telegram typing indicator failed for chat %s: %s", chat_id, exc)
 
+        user_context = self.memory.get_context(str(user_id))
+        all_scheduled_tasks, remaining_request = self._parse_multi_intent_schedule_with_llm(
+            message=message,
+            user_id=user_id,
+            language=user_language,
+            context_rows=user_context,
+        )
+
+        response_parts: list[str] = []
+        if all_scheduled_tasks and self.scheduler:
+            existing_names = {str(t.get("name", "")) for t in self.scheduler.get_tasks()}
+            for task in all_scheduled_tasks:
+                task_name = str(task.get("name", "task"))
+                if task_name in existing_names:
+                    task_name = f"{task_name}_{int(datetime.now(UTC).timestamp())}"
+                    task["name"] = task_name
+                existing_names.add(task_name)
+                self.scheduler.add_task(
+                    name=task_name,
+                    interval=str(task.get("interval", "once")),
+                    task_type=str(task.get("type", "reminder")),
+                    enabled=bool(task.get("enabled", True)),
+                    **{k: v for k, v in task.items() if k not in {"name", "interval", "type", "enabled"}},
+                )
+                response_parts.append(
+                    self._build_scheduler_confirmation(
+                        user_id=user_id,
+                        language=user_language,
+                        original_request=message,
+                        task=task,
+                        context_rows=user_context,
+                    )
+                )
+            ok, details = self.scheduler.persist_tasks()
+            if not ok:
+                degraded_notice = self._render_in_user_language(
+                    user_id,
+                    user_language,
+                    f"Scheduler persistence is degraded ({details}), but tasks were created in runtime memory.",
+                )
+                response_parts.append(f"✅ {degraded_notice}")
+
+        operator_input = remaining_request.strip() if remaining_request.strip() else ""
+        should_run_operator = bool(operator_input) or not all_scheduled_tasks
         try:
-            final_action = self._autonomous_operator.execute(message, user_id)
-            response = json.dumps(final_action, ensure_ascii=False)
+            if should_run_operator:
+                final_action = self._autonomous_operator.execute_with_history(
+                    user_request=operator_input or message,
+                    user_id=user_id,
+                    conversation_history=user_context,
+                    language=user_language,
+                )
+                done_result = str(final_action.get("result", "")).strip()
+                if done_result:
+                    response_parts.append(done_result)
         except Exception as exc:  # noqa: BLE001
             logger.exception("Autonomous sandbox execution failed for user %s: %s", user_id, exc)
-            response = json.dumps({"done": True, "result": "Autonomous execution failed."}, ensure_ascii=False)
+            response_parts.append(
+                self._render_in_user_language(
+                    user_id,
+                    user_language,
+                    "Autonomous execution failed.",
+                )
+            )
+
+        response = "\n".join(part for part in response_parts if part).strip()
+        if not response:
+            response = self._render_in_user_language(
+                user_id,
+                user_language,
+                "✅ Request processed.",
+            )
 
         self.memory.update_context(str(user_id), response, "assistant")
         if is_group:
@@ -1716,10 +1999,15 @@ class MessageHandlers:
             )
         self._decision_logger.log(
             event_type="assistant_response",
-            summary="Generated autonomous JSON response",
+            summary="Generated language-aware continuous response",
             user_id=str(user_id),
             source="telegram",
-            details={"message_preview": message[:120], "wants_utc_stamp": wants_utc_stamp},
+            details={
+                "message_preview": message[:120],
+                "language": user_language,
+                "scheduled_tasks": len(all_scheduled_tasks),
+                "had_remaining_request": bool(operator_input),
+            },
         )
         await self._reply(update, response)
 

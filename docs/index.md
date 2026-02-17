@@ -20,6 +20,8 @@ HER-Ai is inspired by the movie **"HER"** and focuses on creating a warm, adapti
 - **Mem0 + PostgreSQL + Redis** for short-term and long-term memory.
 - **Docker-based infrastructure** to run the full stack locally or in production.
 - **Streamlit Admin Dashboard** for usage metrics and health visibility.
+- **Autonomous sandbox execution loop** with strict JSON actions (`command`, `write_to`, `done`).
+- **Language-aware continuity**: responses align to the latest user language and keep full conversation context.
 
 For implementation details, follow the Phase 1 prompt and review the architecture documentation.
 

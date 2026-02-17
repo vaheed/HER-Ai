@@ -251,7 +251,7 @@ def test_telegram_registers_schedule_admin_command() -> None:
     assert "SandboxNetworkTool" in handlers_source
     assert "Port scan summary for" in handlers_source
     assert "Timestamp (UTC):" in handlers_source
-    assert "wants_utc_stamp" in handlers_source
+    assert "user_language = self._detect_user_language" in handlers_source
     assert "self._parse_schedule_request_with_llm(message, user_id)" in handlers_source
 
 
@@ -314,11 +314,21 @@ def test_handlers_route_messages_via_autonomous_sandbox_operator() -> None:
     handlers_source = Path("her-core/her_telegram/handlers.py").read_text()
     operator_source = Path("her-core/her_telegram/autonomous_operator.py").read_text()
     assert "AutonomousSandboxOperator" in handlers_source
-    assert "self._autonomous_operator.execute(message, user_id)" in handlers_source
+    assert "self._autonomous_operator.execute_with_history(" in handlers_source
     assert "Invalid format. Return JSON action only." in operator_source
     assert '"background": false' in operator_source
     assert '"write_to": "/absolute/path/file.ext"' in operator_source
     assert '"done": true' in operator_source
+    assert "Full conversation history (oldest to newest):" in operator_source
+
+
+def test_handlers_enforce_language_alignment_and_multi_intent_schedule_flow() -> None:
+    handlers_source = Path("her-core/her_telegram/handlers.py").read_text()
+    assert "def _detect_user_language(" in handlers_source
+    assert "def _parse_multi_intent_schedule_with_llm(" in handlers_source
+    assert "def _build_scheduler_confirmation(" in handlers_source
+    assert "✅ " in handlers_source
+    assert "latest user message with full conversation context" in handlers_source
 
 
 def test_sandbox_container_emits_startup_ready_log() -> None:

@@ -82,7 +82,7 @@ Expected:
 - Bot returns topic list and usage (`/example <topic>`, `/example all`).
 - Response includes examples for scheduling/automation.
 
-### 3.3 Conversational response path works
+### 3.3 Language alignment + context continuity
 
 Send:
 
@@ -91,8 +91,19 @@ Hello HER, can you remember that I like jasmine tea?
 ```
 
 Expected:
-- Bot sends a normal conversational reply.
-- A follow-up message in same chat should keep continuity.
+- Bot response language matches the user's message language.
+- Context continuity is preserved in follow-ups (no per-message reset).
+
+Send immediately after:
+
+```text
+call Ali
+```
+
+Expected:
+- Follow-up is treated as a new actionable task (not ignored).
+- Scheduler/handler path creates a new task or action using prior context.
+- Confirmation remains in the same user language.
 
 ---
 
@@ -167,7 +178,9 @@ Remind me to stretch in 15 minutes
 ```
 
 Expected:
-- HER confirms naturally (for example: `Got it. I'll remind you in 15 minutes.`).
+- HER confirms in the user's language.
+- Confirmation format starts with `✅`.
+- Confirmation references the original request and includes clear time context.
 - A one-time scheduler task is created internally and persisted.
 
 Send:
@@ -177,7 +190,7 @@ Remind me every day at 9am to review my goals
 ```
 
 Expected:
-- HER confirms recurring reminder setup naturally.
+- HER confirms recurring reminder setup in the same user language.
 - Task appears in dashboard Jobs page under Upcoming Jobs.
 
 Send:
@@ -187,8 +200,18 @@ Check BTC price every 2 minutes and notify me when it is 10% above the current p
 ```
 
 Expected:
-- HER confirms automation setup naturally.
+- HER handles both intents sequentially if present in one message.
 - A workflow task is created with interval + condition steps and appears in `/schedule list`.
+
+Send multilingual switch test:
+
+```text
+Recuérdame en 10 minutos llamar a Sara
+```
+
+Expected:
+- HER switches to Spanish confirmation immediately.
+- A one-time reminder task is created and persisted.
 
 Send:
 

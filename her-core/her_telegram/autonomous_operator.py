@@ -69,9 +69,43 @@ class AutonomousSandboxOperator:
         self._memory_limit_mb = max(64, int(memory_limit_mb))
 
     def execute(self, user_request: str, user_id: int) -> dict[str, Any]:
+        return self.execute_with_history(
+            user_request=user_request,
+            user_id=user_id,
+            conversation_history=[],
+            language="unknown",
+        )
+
+    def execute_with_history(
+        self,
+        user_request: str,
+        user_id: int,
+        conversation_history: list[dict[str, Any]],
+        language: str,
+    ) -> dict[str, Any]:
+        history_lines: list[str] = []
+        for item in conversation_history:
+            role = str(item.get("role", "user"))
+            msg = str(item.get("message", ""))
+            if msg.strip():
+                history_lines.append(f"{role}: {msg}")
+        history_text = "\n".join(history_lines) if history_lines else "(none)"
         llm_messages: list[Any] = [
-            SystemMessage(content=f"{_HER_OPERATOR_PROMPT}\n\n{_STRICT_FORMAT_PROMPT}"),
-            HumanMessage(content=user_request),
+            SystemMessage(
+                content=(
+                    f"{_HER_OPERATOR_PROMPT}\n\n{_STRICT_FORMAT_PROMPT}\n\n"
+                    "Response language rules:\n"
+                    f"- Latest user language: {language}\n"
+                    "- Any user-visible text in JSON fields must match that language.\n"
+                )
+            ),
+            HumanMessage(
+                content=(
+                    "Full conversation history (oldest to newest):\n"
+                    f"{history_text}\n\n"
+                    f"Latest user request:\n{user_request}"
+                )
+            ),
         ]
         executed_in_sandbox = False
 

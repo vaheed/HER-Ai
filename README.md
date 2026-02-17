@@ -93,6 +93,8 @@ docker compose logs -f her-bot
 - **Autonomous Sandbox Loop**: Every non-command user message is executed via JSON actions in the sandbox (`command`, `write_to`, `done`)
 - **Strict JSON Action Contract**: Invalid/non-JSON LLM outputs are rejected and retried with `Invalid format. Return JSON action only.`
 - **Multilingual Operator Input**: Requests in any language are interpreted and converted into executable Linux actions
+- **Language-Aligned Replies**: HER detects the latest user language and keeps confirmations/replies in that same language, switching when the user switches
+- **Context Continuity + Multi-Intent**: Full conversation history is sent into interpretation/execution loops; multiple intents are handled sequentially in one turn
 - **Sandbox Safety Guards**: Per-command timeout, CPU limit, memory limit, and forced kill for long-running commands
 - **Example Library**: `/example` command plus 60+ ready prompts in docs for fast onboarding
 
@@ -136,8 +138,8 @@ HER is designed as a layered system that separates user interaction, agent orche
 └────────────────────┬────────────────────────────────────────┘
                      │
 ┌────────────────────▼────────────────────────────────────────┐
-│            Unified Interpreter & Command Router              │
-│  Detect language → normalize intent → SCHEDULE/SANDBOX       │
+│      Language-Aware Intent + Autonomous JSON Sandbox Loop    │
+│ Detect language → keep full context → command/write_to/done  │
 └────────────────────┬────────────────────────────────────────┘
                      │
 ┌────────────────────▼────────────────────────────────────────┐
@@ -291,8 +293,8 @@ Common issues and solutions:
 - **OpenRouter + Memory**: long-term memory uses Mem0's OpenAI-compatible adapter internally when `LLM_PROVIDER=openrouter`, so OpenRouter chat + memory can run together
 - **Ollama Memory Errors**: If logs show `model requires more system memory ... than is available`, your Ollama chat model is too large for current container RAM; switch to a smaller `OLLAMA_MODEL` (or raise memory limits) to restore long-term memory writes/search quality
 - **Graceful Degradation**: If PostgreSQL/Mem0/Redis are temporarily unavailable at startup, HER now continues in degraded mode using in-process fallback memory so the agent can still reply while infra recovers
-- **Natural-Language Scheduling**: HER now first compiles scheduling requests into validated task JSON using the chat model (with provider failover), then falls back to rule-based parsing if needed
-- **Multilingual Scheduling**: The unified interpreter detects language and can schedule from non-English requests (for example Persian and Spanish)
+- **Natural-Language Scheduling**: HER extracts one or more scheduling intents from full conversation context and executes them sequentially
+- **Language Alignment**: HER responses and scheduler confirmations follow the latest user language and switch when users switch languages
 
 ### Telegram Connection Issues
 - Verify `TELEGRAM_BOT_TOKEN` is correct

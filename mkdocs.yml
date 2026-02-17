@@ -2,15 +2,34 @@ site_name: HER-Ai Documentation
 site_url: https://vaheed.github.io/HER-Ai/
 repo_url: https://github.com/vaheed/HER-Ai
 repo_name: vaheed/HER-Ai
+
 nav:
   - Home: index.md
   - Architecture: architecture.md
-  - Roadmap: roadmap.md
-  - Phase 1 Prompt: phase1_prompt.md
+  - Installation: installation.md
+  - Configuration: configuration.md
+  - Usage: usage.md
+  - Testing: testing.md
+  - Deployment: deployment.md
+  - Admin and Tooling: admin-tooling.md
   - MCP Guide: mcp_guide.md
-  - Admin Dashboard: dashboard.md
-  - Testing Playbook: testing_playbook.md
-  - Prompt Examples: examples.md
+  - Prompt Library: examples.md
+  - Developer Guidelines: developer-guidelines.md
+  - Roadmap: roadmap.md
+  - Folder Reference:
+      - her-core: folders/her-core.md
+      - her-core agents: folders/her-core-agents.md
+      - her-core telegram: folders/her-core-telegram.md
+      - her-core memory: folders/her-core-memory.md
+      - her-core mcp: folders/her-core-mcp.md
+      - her-core utils: folders/her-core-utils.md
+      - dashboard: folders/dashboard.md
+      - config: folders/config.md
+      - sandbox: folders/sandbox.md
+      - tests: folders/tests.md
+      - init-scripts: folders/init-scripts.md
+      - github workflows: folders/github-workflows.md
+      - docs: folders/docs.md
 
 theme:
   name: material

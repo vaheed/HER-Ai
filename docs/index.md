@@ -1,42 +1,52 @@
-# HER-Ai Documentation
+# Documentation Index
 
-Welcome to the documentation for **HER-Ai**, a personal AI assistant designed for long-term memory, reflection, and evolving personality.
+This is the central documentation map for HER-Ai.
+Use this page to navigate architecture, setup, operations, development workflow, and module-level references.
 
-## Quick Links
-- [Project Repository](https://github.com/vaheed/HER-Ai)
-- [Architecture Overview](architecture.md)
-- [Roadmap](roadmap.md)
-- [Phase 2 Runtime Status](#phase-2-runtime-status)
-- [Phase 1 Build Prompt](phase1_prompt.md)
-- [MCP Integration Guide](mcp_guide.md)
-- [Admin Dashboard](dashboard.md)
-- [Capability Testing Playbook](testing_playbook.md)
-- [Prompt Examples](examples.md)
+## Structured TOC
 
-## What is HER-Ai?
-HER-Ai is inspired by the movie **"HER"** and focuses on creating a warm, adaptive, and emotionally intelligent assistant. The system is composed of:
+- 1. Project Foundations
+  - `README.md` - project overview, quick start, contribution entry points
+  - `docs/architecture.md` - runtime architecture, data flow, module responsibilities
+  - `docs/roadmap.md` - 3-phase future implementation roadmap
+- 2. Setup and Runtime
+  - `docs/installation.md` - platform-by-platform installation and first boot
+  - `docs/configuration.md` - full environment and YAML configuration reference
+  - `docs/usage.md` - user/admin workflows and command usage
+  - `docs/deployment.md` - container deployment and production guidance
+- 3. Quality and Operations
+  - `docs/testing.md` - test strategy and test authoring guidance
+  - `docs/admin-tooling.md` - dashboard pages, CLI operations, script workflows
+- 4. Examples and Team Workflow
+  - `docs/examples.md` - prompt library and scenario walkthroughs
+  - `docs/developer-guidelines.md` - coding standards, linting, git, release flow
+- 5. Folder and Code-Area Reference
+  - `docs/folders/her-core.md`
+  - `docs/folders/her-core-agents.md`
+  - `docs/folders/her-core-telegram.md`
+  - `docs/folders/her-core-memory.md`
+  - `docs/folders/her-core-mcp.md`
+  - `docs/folders/her-core-utils.md`
+  - `docs/folders/dashboard.md`
+  - `docs/folders/config.md`
+  - `docs/folders/sandbox.md`
+  - `docs/folders/tests.md`
+  - `docs/folders/init-scripts.md`
+  - `docs/folders/github-workflows.md`
+  - `docs/folders/docs.md`
 
-- **CrewAI Agents** for conversation, reflection, and personality evolution.
-- **Mem0 + PostgreSQL + Redis** for short-term and long-term memory.
-- **Docker-based infrastructure** to run the full stack locally or in production.
-- **Streamlit Admin Dashboard** for usage metrics and health visibility.
-- **Autonomous sandbox execution loop** with strict JSON actions (`command`, `write_to`, `done`).
-- **Language-aware continuity**: responses align to the latest user language and keep full conversation context.
+## Recommended Reading Paths
 
-For implementation details, follow the Phase 1 prompt and review the architecture documentation.
+- New contributor: `README.md` -> `docs/installation.md` -> `docs/usage.md` -> `docs/developer-guidelines.md`
+- Operator/admin: `docs/installation.md` -> `docs/configuration.md` -> `docs/admin-tooling.md` -> `docs/deployment.md`
+- Feature developer: `docs/architecture.md` -> `docs/folders/her-core.md` -> `docs/testing.md` -> `docs/developer-guidelines.md`
 
-For hands-on verification of Telegram, MCP, memory, dashboard, and operational behaviors, use the Capability Testing Playbook.
+## Cross-Reference Entry Points
 
-
-## Phase 2 Runtime Status
-
-Phase 2 scaffolding is now present in the repository:
-
-- Telegram runtime package: `her-core/her_telegram/`
-- MCP runtime package: `her-core/her_mcp/`
-- Runtime config files:
-  - `config/telegram.yaml`
-  - `config/rate_limits.yaml`
-  - `config/mcp_servers.yaml`
-
-Use the roadmap for completion tracking and open items; use README for environment and startup commands.
+- Runtime bootstrap: `her-core/main.py`
+- Telegram handler logic: `her-core/her_telegram/handlers.py`
+- MCP integration: `her-core/her_mcp/manager.py`
+- Scheduler and task persistence: `her-core/utils/scheduler.py`
+- Dashboard UI and data readers: `dashboard/app.py`
+- Container orchestration: `docker-compose.yml`
+- CI workflow: `.github/workflows/ci.yml`

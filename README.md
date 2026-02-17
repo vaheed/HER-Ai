@@ -1,361 +1,222 @@
-# HER - Personal AI Assistant System
+# HER-Ai
 
-> A 24/7 emotionally intelligent AI companion inspired by the movie "HER" - warm, curious, adaptive, and continuously evolving.
+HER-Ai is a containerized personal AI assistant platform inspired by the long-memory companion model from *HER*.
+It combines Telegram interaction, multi-agent orchestration, persistent memory, sandboxed execution, and an operational dashboard.
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Documentation](https://img.shields.io/badge/docs-available-brightgreen)](https://vaheed.github.io/HER-Ai/)
+## Project Vision
 
-## 🌟 Vision
+HER-Ai is built to support a long-lived assistant that can:
+- maintain continuity across conversations,
+- adapt communication style over time,
+- run safe tool-assisted tasks,
+- stay observable and operable in production-like environments.
 
-HER is not just another chatbot. It's a long-living AI assistant designed to:
-- **Remember** conversations and develop genuine continuity
-- **Reflect** on experiences to form deeper understanding
-- **Evolve** personality traits through interactions
-- **Adapt** communication style per user over time
-- **Monitor** internal state via real-time dashboard
-- **Feel** consistent, not stateless or robotic
+## Architecture
 
-Unlike typical AI assistants, HER learns, grows, and maintains authentic warmth across all interactions.
+The system is split into runtime, interfaces, data, and operations layers.
 
-## 🚀 Quick Start
+```text
+User (Telegram) / Operator (Dashboard)
+        |
+        v
+her-core runtime
+  - Telegram handlers and bot loop
+  - CrewAI agents (conversation/reflection/personality/tool)
+  - MCP + sandbox tooling
+        |
+        v
+Memory and state
+  - Redis (short-term context and runtime metrics)
+  - PostgreSQL + pgvector + Mem0 (long-term memory)
+        |
+        v
+Operations
+  - Docker Compose orchestration
+  - CI pipeline + container publishing + docs deployment
+```
 
-### Prerequisites
-- Docker & Docker Compose
-- Telegram Bot Token ([Get one here](https://core.telegram.org/bots/tutorial))
-- LLM Provider (OpenAI/Groq/Ollama/OpenRouter)
+Key code entry points:
+- Runtime bootstrap: `her-core/main.py`
+- Telegram command/message handling: `her-core/her_telegram/handlers.py`
+- MCP lifecycle: `her-core/her_mcp/manager.py`
+- Scheduler engine: `her-core/utils/scheduler.py`
+- Dashboard app: `dashboard/app.py`
+- Compose stack: `docker-compose.yml`
 
-### Installation
+Full architecture doc: `docs/architecture.md`.
 
-1. **Clone the repository**
+## Supported Platforms and Requirements
+
+| Item | Requirement |
+|---|---|
+| OS | macOS, Linux, Windows (WSL2 recommended for local Linux-like workflow) |
+| Container runtime | Docker Engine 24+ or Docker Desktop 4+ |
+| Docker Compose | v2 (`docker compose`) |
+| CPU/RAM | Minimum 4 CPU / 8 GB RAM (more for local Ollama models) |
+| Network | Required for model/tool APIs and package pulls |
+
+Optional local (non-Docker) development:
+- Python 3.11
+- Node.js + npm (for MCP server binaries)
+- PostgreSQL 17 + pgvector
+- Redis 7
+
+## Installation
+
+### 1. Clone
+
 ```bash
 git clone https://github.com/vaheed/HER-Ai.git
 cd HER-Ai
 ```
 
-2. **Configure environment**
+### 2. Configure environment
+
 ```bash
 cp .env.example .env
-# Edit .env with your credentials
 ```
 
-3. **Launch HER**
+Set at minimum:
+- `TELEGRAM_BOT_TOKEN`
+- `ADMIN_USER_ID`
+- your chosen LLM credentials/provider settings
+
+### 3. Start stack
+
 ```bash
 docker compose up -d --build
 ```
 
-4. **Verify installation**
+### 4. Verify services
+
 ```bash
 docker compose ps
-docker compose logs -f her-bot
+curl -sS http://localhost:8000
 ```
 
-5. **Start chatting**
-- Open Telegram and message your bot: `/start`
-- Begin your journey with HER
+Expected health response:
 
-> **📖 For detailed setup instructions**, see the [Quick Start Guide](#-documentation) or [Testing Playbook](docs/testing_playbook.md)
-
-## ✨ Key Features
-
-### 💭 Three-Layer Memory System
-- **Short-Term Memory (Redis)**: Recent conversations (24h), fast retrieval
-- **Long-Term Memory (PostgreSQL + pgvector)**: Semantic memories, user facts, emotional patterns
-- **Meta-Memory**: Personality state, traits evolution, growth markers
-
-### 🎭 Dynamic Personality Evolution
-- **5 Core Traits**: Warmth, Curiosity, Assertiveness, Humor, Emotional Depth (0-100 scale)
-- **Evolution Mechanisms**: Conversation-driven, reflection-driven, admin-tuned, time-based
-- **Safety Constraints**: Bounded traits, immutable empathy/safety values
-
-### 🔁 Reinforcement Learning Loop
-- **Per-Interaction Scoring**: Meaningful interactions are scored using observed feedback and task success
-- **Adaptive Tendencies**: Communication tendencies (conciseness, empathy, initiative, helpfulness) are updated gradually
-- **Persistent Lessons**: Reinforcement lessons are stored in long-term memory and SQL/Redis logs
-- **Weekly Optimization**: A scheduled self-optimization job analyzes patterns and applies small, stable improvements
-
-### 🤖 Agent Architecture (CrewAI)
-- **Conversation Agent**: Primary interaction handler
-- **Reflection Agent**: Analyzes conversations, decides what to remember
-- **Personality Evolution Agent**: Adjusts traits based on interactions
-- **Tool Agent**: Executes web searches, code, file operations
-
-### 🔧 Sandbox Execution Environment
-- **MCP Servers**: Pre-built integrations for 1000+ services
-- **Web Search**: DuckDuckGo, Brave, Serper API via MCP
-- **Code Execution**: Python, Node.js, Bash via sandbox container
-- **Network/Security Diagnostics**: nmap, DNS tools, ping, traceroute, SSL checks (no API keys)
-- **File Operations**: Local, Google Drive, Dropbox via MCP
-- **Safe & Isolated**: All operations run in isolated Docker sandbox container
-
-### 📱 Dual-Mode Interface
-- **Admin Mode**: Full access, personality tuning, memory management
-- **Public Mode**: User interactions, approval-based features
-- **Autonomous Sandbox Loop**: Every non-command user message is executed via JSON actions in the sandbox (`command`, `write_to`, `done`)
-- **Strict JSON Action Contract**: Invalid/non-JSON LLM outputs are rejected and retried with `Invalid format. Return JSON action only.`
-- **Multilingual Operator Input**: Requests in any language are interpreted and converted into executable Linux actions
-- **Language-Aligned Replies**: HER detects the latest user language and keeps confirmations/replies in that same language, switching when the user switches
-- **Context Continuity + Multi-Intent**: Full conversation history is sent into interpretation/execution loops; multiple intents are handled sequentially in one turn
-- **Sandbox Safety Guards**: Per-command timeout, CPU limit, memory limit, and forced kill for long-running commands
-- **Example Library**: `/example` command plus 60+ ready prompts in docs for fast onboarding
-
-### 📊 Real-Time Dashboard
-- **Monitoring**: Conversation logs, agent activity, system health
-- **Visualization**: Personality traits, memory statistics, usage metrics
-- **Management**: Manual personality tuning, memory exploration
-
-## 📚 Documentation
-
-Comprehensive documentation is available in the `docs/` directory:
-
-### Core Documentation
-- **[Architecture Overview](docs/architecture.md)** - Complete system architecture, design patterns, and technical specifications
-- **[MCP Integration Guide](docs/mcp_guide.md)** - Model Context Protocol integration, server configuration, and tool usage
-- **[Admin Dashboard](docs/dashboard.md)** - Dashboard features, usage, and configuration
-- **[Testing Playbook](docs/testing_playbook.md)** - Step-by-step capability testing and validation guide
-- **[Prompt Examples](docs/examples.md)** - 60+ short prompts covering chat, memory, tools, sandbox, and automation
-
-### Project Management
-- **[Project Roadmap](docs/roadmap.md)** - Development phases, milestones, and implementation timeline
-- **[Agent Guidelines](AGENTS.md)** - Development workflow, testing requirements, and contribution guidelines
-- **[Documentation Index](docs/index.md)** - Central documentation hub with quick links
-
-### Additional Resources
-- **[Phase 1 Prompt](docs/phase1_prompt.md)** - Original build specification and requirements
-
-## 🏗️ Architecture Overview
-
-HER is designed as a layered system that separates user interaction, agent orchestration, memory, and tool execution:
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                   Experience & Interfaces                    │
-│   Telegram Bot (Admin/Public) · Admin Dashboard (Streamlit)  │
-└────────────────────┬────────────────────────────────────────┘
-                     │
-┌────────────────────▼────────────────────────────────────────┐
-│                Agent Orchestration (CrewAI)                  │
-│  Conversation · Reflection · Personality · Tool Agents       │
-└────────────────────┬────────────────────────────────────────┘
-                     │
-┌────────────────────▼────────────────────────────────────────┐
-│      Language-Aware Intent + Autonomous JSON Sandbox Loop    │
-│ Detect language → keep full context → command/write_to/done  │
-└────────────────────┬────────────────────────────────────────┘
-                     │
-┌────────────────────▼────────────────────────────────────────┐
-│                 Memory & State (Mem0 + Redis)                │
-│  Short-Term Context (Redis TTL) · Long-Term Memory (pgvector) │
-└────────────────────┬────────────────────────────────────────┘
-                     │
-┌────────────────────▼────────────────────────────────────────┐
-│                Tools & Execution Environment                 │
-│  Sandbox Container · MCP Servers · Web/Code/File Operations  │
-└─────────────────────────────────────────────────────────────┘
+```json
+{"status":"ok"}
 ```
 
-> **📖 For detailed architecture documentation**, see [docs/architecture.md](docs/architecture.md)
+Detailed platform setup: `docs/installation.md`.
 
-## 🛠️ Technology Stack
+## Usage
 
-| Component | Technology |
-|-----------|-----------|
-| **Agent Framework** | CrewAI |
-| **Memory System** | Mem0 |
-| **MCP Integration** | Official Python SDK + 1000+ community servers |
-| **LLM Providers** | OpenAI GPT-4, Groq (Llama-3, Mixtral), Ollama, OpenRouter |
-| **Vector DB** | PostgreSQL + pgvector |
-| **Short-term Cache** | Redis |
-| **Telegram Bot** | python-telegram-bot |
-| **Sandbox** | Docker Ubuntu Container |
-| **Web Search** | DuckDuckGo, Serper API |
-| **Twitter Integration** | Tweepy (Twitter API v2) |
-| **Task Scheduler** | Custom async scheduler (cron-like) |
-| **Dashboard** | Streamlit |
-| **Orchestration** | Docker Compose |
+### Basic usage
 
-## 🔧 Configuration
+1. Open your bot in Telegram.
+2. Send `/start`.
+3. Send normal messages.
 
-### Environment Variables
+Basic commands:
+- `/help`
+- `/example`
+- `/status` (admin)
+- `/schedule list` (admin)
 
-Key environment variables (see `.env.example` for complete list):
+### Advanced usage
 
-```env
-# Telegram
-TELEGRAM_ENABLED=true
-TELEGRAM_BOT_TOKEN=your_telegram_bot_token
-ADMIN_USER_ID=your_telegram_user_id
+Natural-language scheduling:
+- `Remind me in 20 minutes to call Sara.`
+- `Every day at 9am remind me to review priorities.`
 
-# LLM Provider (choose one)
-LLM_PROVIDER=ollama  # or openai, groq, openrouter
-LLM_ENABLE_FALLBACK=true
-LLM_FALLBACK_PROVIDER=ollama
-OLLAMA_MODEL=llama3.2:3b
+Automation workflow intent:
+- `Check BTC every 5 minutes and alert me if it drops 5%.`
 
-# Database
-POSTGRES_USER=her
-POSTGRES_PASSWORD=her_secure_password
-POSTGRES_DB=her_memory
+Tooling/security diagnostics intent:
+- `Check SSL expiry for github.com.`
+- `Run a DNS lookup for openai.com.`
 
-# Redis
-REDIS_PASSWORD=redis_secure_password
+Complete usage guide: `docs/usage.md`.
 
-# MCP / Sandbox
-MCP_CONFIG_PATH=mcp_servers.yaml
-MCP_SERVER_START_TIMEOUT_SECONDS=60
-SANDBOX_CONTAINER_NAME=her-sandbox
-HER_CONFIG_DIR=
-DOCKER_GID=998
-TZ=UTC
-```
+## Configuration Reference
 
-### Configuration Files
+Configuration sources:
+- Environment variables: `.env.example`
+- YAML runtime config: `config/*.yaml`
 
-Configuration files are located in `config/`:
+Primary runtime controls include:
+- LLM routing and failover (`LLM_PROVIDER`, `LLM_ENABLE_FALLBACK`)
+- memory strictness (`MEMORY_STRICT_MODE`)
+- Telegram mode/rate-limits (`TELEGRAM_PUBLIC_*`)
+- scheduler/sandbox limits (`HER_AUTONOMOUS_MAX_STEPS`, `HER_SANDBOX_*`)
+- MCP profile selection (`MCP_CONFIG_PATH`)
 
-- `config/agents.yaml` - Agent definitions and behavior
-- `config/personality.yaml` - Personality traits and evolution settings
-- `config/memory.yaml` - Memory system configuration
-- `config/mcp_servers.yaml` - MCP server integrations
-- `config/telegram.yaml` - Telegram bot settings
-- `config/scheduler.yaml` - Scheduled tasks configuration
-  - Includes autonomous hourly `memory_reflection` baseline task
+Full variable-by-variable reference: `docs/configuration.md`.
 
-> **📖 For detailed configuration options**, see [docs/architecture.md](docs/architecture.md#-configuration-management)
->
-> Runtime note: inside the container, when `/app/config` is read-only, entrypoint automatically falls back to `/app/config.defaults` via `HER_CONFIG_DIR` so startup continues with valid defaults.
-> If you want runtime edits (`/schedule add`, config writes), mount `/app/config` as writable or set `HER_CONFIG_DIR` to a writable path.
+If Ollama memory operations fail with an error like `model requires more system memory than is available`, use a smaller model or increase container memory.
 
-Set `MCP_CONFIG_PATH=mcp_servers.local.yaml` if you want the no-key local MCP profile.
-By default, compose runs `her-bot` as root so sandbox Docker access works without manual `DOCKER_GID` changes.
-Set `DOCKER_GID` only if you explicitly run `her-bot` as non-root.
+## Testing
 
-## 🧪 Testing
-
-After installation, validate your setup using the comprehensive testing playbook:
+Run repository tests:
 
 ```bash
-# Follow the step-by-step guide
-cat docs/testing_playbook.md
+pytest -q
 ```
 
-Quick validation:
+Run targeted tests:
+
 ```bash
-# Check health
-curl http://localhost:8000
-
-# View logs
-docker compose logs -f her-bot
-
-# Verify sandbox penetration/network tools
-docker compose exec sandbox check_pentest_tools
-
-# Access dashboard
-open http://localhost:8501
+pytest tests/test_smoke.py -q
+pytest tests/test_runtime_guards.py -q
 ```
 
-> **📖 For complete testing procedures**, see [docs/testing_playbook.md](docs/testing_playbook.md)
+Run runtime validation with containers:
 
-## 🗣️ Prompt Examples
+```bash
+docker compose logs --tail=200 her-bot
+```
 
-### Scheduler (multilingual)
-- English: `Remind me every 2 hours to drink water.`
-- Persian: `هر روز ساعت ۸ صبح یادآوری کن داروهام رو بخورم.`
-- Spanish: `Recuérdame mañana a las 9:30 enviar el informe.`
+Testing guide: `docs/testing.md`.
 
-### Sandbox / Security
-- `Run DNS lookup for openai.com.`
-- `Run nmap top ports on scanme.nmap.org.`
-- `Check SSL handshake for github.com.`
+## Build and Deployment
 
-### Natural-language Handlers
-- `If BTC drops 5% from current price, notify me every 10 minutes.`
-- `Track this endpoint every 5 minutes and alert on error=true: https://example.com/status`
+### Local build
 
-## 🐛 Troubleshooting
+```bash
+docker compose build her-bot dashboard sandbox
+```
 
-Common issues and solutions:
+### Start in detached mode
 
-### Docker Compose Build Errors
-- Ensure you're using the latest `docker-compose.yml` from the repository
-- Check that all required directories exist
+```bash
+docker compose up -d
+```
 
-### Sandbox Capability Degraded (`Permission denied` on Docker socket)
-- Ensure `DOCKER_GID` matches your host Docker socket group id:
-  - `stat -c '%g' /var/run/docker.sock`
-- Set that value in `.env` as `DOCKER_GID=<gid>` and restart:
-  - `docker compose up -d --build`
+### Production guidance
+- prefer pinned image tags over `latest`,
+- externalize secrets,
+- mount writable config only where required,
+- monitor dashboard + logs + health checks.
 
-### Memory/LLM Provider Issues
-- Verify your LLM provider credentials are correct
-- Check container logs: `docker compose logs her-bot`
-- Ensure sufficient system resources (RAM/CPU)
-- **Provider Over-Capacity (502/503)**: HER now auto-fails over to `LLM_FALLBACK_PROVIDER` (default `ollama`) when the primary provider returns HTTP `502`/`503`; keep Ollama running and ensure the fallback model is pulled
-- **OpenRouter + Memory**: long-term memory uses Mem0's OpenAI-compatible adapter internally when `LLM_PROVIDER=openrouter`, so OpenRouter chat + memory can run together
-- **Ollama Memory Errors**: If logs show `model requires more system memory ... than is available`, your Ollama chat model is too large for current container RAM; switch to a smaller `OLLAMA_MODEL` (or raise memory limits) to restore long-term memory writes/search quality
-- **Graceful Degradation**: If PostgreSQL/Mem0/Redis are temporarily unavailable at startup, HER now continues in degraded mode using in-process fallback memory so the agent can still reply while infra recovers
-- **Natural-Language Scheduling**: HER extracts one or more scheduling intents from full conversation context and executes them sequentially
-- **Language Alignment**: HER responses and scheduler confirmations follow the latest user language and switch when users switch languages
+Deployment details: `docs/deployment.md`.
 
-### Telegram Connection Issues
-- Verify `TELEGRAM_BOT_TOKEN` is correct
-- Check network connectivity
-- Review startup logs for connection errors
+## Documentation Map
 
-> **📖 For detailed troubleshooting**, see the [Testing Playbook](docs/testing_playbook.md) or check [GitHub Issues](https://github.com/vaheed/HER-Ai/issues)
+- Docs home: `docs/index.md`
+- Architecture: `docs/architecture.md`
+- Installation: `docs/installation.md`
+- Configuration: `docs/configuration.md`
+- Usage: `docs/usage.md`
+- Testing: `docs/testing.md`
+- Deployment: `docs/deployment.md`
+- Admin and tooling: `docs/admin-tooling.md`
+- Prompt library: `docs/examples.md`
+- Developer workflow: `docs/developer-guidelines.md`
+- Roadmap: `docs/roadmap.md`
 
-## 📊 Admin Dashboard
+## Contribution Guidelines
 
-Access the admin dashboard at `http://localhost:8501` for:
-- Real-time conversation monitoring
-- Personality trait visualization
-- Memory explorer and search
-- Agent activity logs
-- Usage metrics and analytics
-- Manual personality tuning
+1. Read `AGENTS.md` and `docs/index.md` before changes.
+2. Keep cross-component changes synchronized (`her-core`, `dashboard`, `config`, `docs`, compose/CI).
+3. Update docs when behavior/configuration changes.
+4. Run relevant tests before opening PR.
+5. Include summary, tests run, and follow-ups in PR description.
 
-> **📖 For dashboard documentation**, see [docs/dashboard.md](docs/dashboard.md)
+See `docs/developer-guidelines.md` for coding standards, git workflow, and release process.
 
-## 🔌 MCP Server Integration
+## License
 
-HER uses the Model Context Protocol (MCP) for external integrations, providing access to 1000+ pre-built servers:
-
-- **Web Search**: DuckDuckGo, Brave Search, Google Search (via Serper)
-- **File Systems**: Local files, Google Drive, Dropbox, OneDrive
-- **Databases**: PostgreSQL, MySQL, SQLite, MongoDB
-- **Communication**: Slack, Discord, Telegram
-- **Development**: GitHub, GitLab, Docker
-- **Productivity**: Google Calendar, Notion, Obsidian
-
-> **📖 For MCP integration guide**, see [docs/mcp_guide.md](docs/mcp_guide.md)
-
-## 🤝 Contributing
-
-Contributions are welcome! Please follow these guidelines:
-
-1. Read [AGENTS.md](AGENTS.md) for development workflow
-2. Check [docs/roadmap.md](docs/roadmap.md) for current priorities
-3. Ensure tests pass before submitting PRs
-4. Update documentation for any behavior changes
-
-> **📖 For contribution guidelines**, see [AGENTS.md](AGENTS.md)
-
-## 📄 License
-
-MIT License - see [LICENSE](LICENSE) for details.
-
-## 🙏 Acknowledgments
-
-- Inspired by the movie "HER" (2013)
-- Built with CrewAI, Mem0, and the open-source community
-- Thanks to all contributors and the MCP community
-
-## 📞 Support & Resources
-
-- **Documentation**: https://vaheed.github.io/HER-Ai/
-- **GitHub Repository**: https://github.com/vaheed/HER-Ai
-- **Issues**: [GitHub Issues](https://github.com/vaheed/HER-Ai/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/vaheed/HER-Ai/discussions)
-
----
-
-**Made with ❤️ by developers who believe AI should be warm, not cold**
+MIT (see repository license metadata).

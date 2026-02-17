@@ -13,6 +13,7 @@ The sandbox container is configured with:
 import json
 import logging
 import os
+import shlex
 import time
 from datetime import datetime, timezone
 from typing import Any
@@ -83,11 +84,16 @@ class SandboxExecutor:
         """
         start_time = time.time()
         try:
+            # Docker SDK exec_run does not support a "timeout" kwarg consistently across versions.
+            # Enforce execution timeout inside the sandbox with GNU timeout.
+            wrapped = (
+                f"timeout --signal=TERM --kill-after=5s {max(1, int(timeout))}s "
+                f"bash -lc {shlex.quote(command)}"
+            )
             result = self.container.exec_run(
-                command,
+                wrapped,
                 user=user,
                 workdir=workdir,
-                timeout=timeout,
                 demux=True,  # Returns (stdout, stderr) tuple
             )
             execution_time = time.time() - start_time
@@ -95,6 +101,8 @@ class SandboxExecutor:
             stdout, stderr = result.output
             stdout_str = stdout.decode("utf-8", errors="replace") if stdout else ""
             stderr_str = stderr.decode("utf-8", errors="replace") if stderr else ""
+            if result.exit_code == 124 and not stderr_str:
+                stderr_str = f"Command timed out after {max(1, int(timeout))}s"
 
             result_dict = {
                 "success": result.exit_code == 0,

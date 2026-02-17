@@ -26,6 +26,7 @@ from agents.personality_agent import PersonalityAgent
 from utils.config_paths import resolve_config_file
 from utils.decision_log import DecisionLogger
 from utils.reinforcement import ReinforcementEngine
+from utils.schedule_helpers import normalize_weekdays_input
 
 logger = logging.getLogger(__name__)
 
@@ -223,36 +224,7 @@ class TaskScheduler:
 
     @staticmethod
     def _normalize_weekdays(weekdays: Any) -> list[int]:
-        if not isinstance(weekdays, list):
-            return []
-
-        mapping = {
-            "mon": 0,
-            "monday": 0,
-            "tue": 1,
-            "tuesday": 1,
-            "wed": 2,
-            "wednesday": 2,
-            "thu": 3,
-            "thursday": 3,
-            "fri": 4,
-            "friday": 4,
-            "sat": 5,
-            "saturday": 5,
-            "sun": 6,
-            "sunday": 6,
-        }
-
-        normalized: set[int] = set()
-        for item in weekdays:
-            if isinstance(item, int) and 0 <= item <= 6:
-                normalized.add(item)
-                continue
-            text = str(item).strip().lower()
-            if text in mapping:
-                normalized.add(mapping[text])
-
-        return sorted(normalized)
+        return normalize_weekdays_input(weekdays)
 
     def _serializable_tasks(self) -> list[dict[str, Any]]:
         """Return task list safe for config persistence."""

@@ -905,6 +905,30 @@ api_keys:
                     [PostgreSQL - Personality State]
 ```
 
+### Unified Interpreter Routing (Multilingual)
+
+Every inbound Telegram message now passes through a single LLM interpreter before fallback chat logic:
+
+```
+[User Message]
+      |
+      v
+[UnifiedRequestInterpreter]
+  - Detect language
+  - Normalize intent
+  - Emit one envelope:
+      * SCHEDULE {task_json}
+      * SANDBOX <shell_command>
+      * NONE
+      |
+      v
+[Handlers Parser + Executor]
+  - Parse envelope
+  - Validate schema/safety
+  - Execute scheduler or sandbox
+  - Persist decision logs
+```
+
 ### Memory Lifecycle
 
 ```
@@ -1291,6 +1315,7 @@ DOCKER_GID=998           # docker.sock group id for sandbox capability
 - Runtime scheduler edits (`/schedule add|set|enable|disable`) require a writable config path.
 - Scheduler publishes live upcoming jobs to Redis key `her:scheduler:state`; execution history is written to `her:scheduler:jobs`.
 - Runtime transparency events are written to `her:decision:logs` and Postgres table `decision_logs`.
+- Sandbox execution timeout is enforced inside container processes with GNU `timeout`; Docker SDK `exec_run(timeout=...)` is intentionally not used.
 
 ### File Structure
 

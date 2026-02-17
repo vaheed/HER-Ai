@@ -43,9 +43,9 @@ RUN useradd -m -s /bin/bash sandbox \
     && mkdir -p /workspace /home/sandbox/.config/her \
     && chown -R sandbox:sandbox /workspace /home/sandbox/.config
 
-COPY mcp_servers.local.yaml /home/sandbox/.config/her/mcp_servers.local.yaml
+COPY config/mcp_servers.local.yaml /home/sandbox/.config/her/mcp_servers.local.yaml
 RUN chown sandbox:sandbox /home/sandbox/.config/her/mcp_servers.local.yaml
-COPY check_pentest_tools.sh /usr/local/bin/check_pentest_tools
+COPY sandbox/check_pentest_tools.sh /usr/local/bin/check_pentest_tools
 RUN chmod +x /usr/local/bin/check_pentest_tools
 
 USER sandbox

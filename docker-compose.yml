@@ -151,8 +151,8 @@ services:
   sandbox:
     image: ghcr.io/vaheed/her-ai/her-sandbox:latest
     build:
-      context: ./sandbox
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: sandbox/Dockerfile
     container_name: her-sandbox
     networks:
     - her-network

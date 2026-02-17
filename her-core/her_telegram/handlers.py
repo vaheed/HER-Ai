@@ -13,8 +13,9 @@ from telegram.error import NetworkError, TimedOut
 from telegram.ext import ContextTypes
 
 from agents.personality_agent import PersonalityAgent
-from her_mcp.sandbox_tools import SandboxNetworkTool, SandboxSecurityScanTool
+from her_mcp.sandbox_tools import SandboxExecutor, SandboxNetworkTool, SandboxSecurityScanTool
 from her_mcp.tools import CurlWebSearchTool
+from her_telegram.unified_interpreter import UnifiedRequestInterpreter
 from her_telegram.keyboards import get_admin_menu, get_personality_adjustment
 from her_telegram.rate_limiter import RateLimiter
 from memory.mem0_client import HERMemory
@@ -22,6 +23,13 @@ from utils.decision_log import DecisionLogger
 from utils.llm_factory import build_llm
 from utils.metrics import HERMetrics
 from utils.reinforcement import ReinforcementEngine
+from utils.schedule_helpers import (
+    extract_json_object,
+    interval_unit_to_base,
+    normalize_weekdays_input,
+    parse_clock,
+    parse_relative_delta,
+)
 from utils.scheduler import TaskScheduler
 
 logger = logging.getLogger(__name__)
@@ -169,6 +177,7 @@ class MessageHandlers:
             else None
         )
         self._web_search_tool = CurlWebSearchTool()
+        self._request_interpreter = UnifiedRequestInterpreter(self._generate_response_with_failover)
         self._decision_logger = DecisionLogger()
         self._reinforcement = ReinforcementEngine()
         self._metrics: HERMetrics | None = None
@@ -810,19 +819,7 @@ class MessageHandlers:
 
     @staticmethod
     def _parse_clock(text: str) -> tuple[int, int] | None:
-        match = re.search(r"\bat\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b", text, re.IGNORECASE)
-        if not match:
-            return None
-        hour = int(match.group(1))
-        minute = int(match.group(2) or "0")
-        meridian = (match.group(3) or "").lower()
-        if meridian == "pm" and hour < 12:
-            hour += 12
-        if meridian == "am" and hour == 12:
-            hour = 0
-        if 0 <= hour <= 23 and 0 <= minute <= 59:
-            return hour, minute
-        return None
+        return parse_clock(text)
 
     @staticmethod
     def _extract_reminder_body(message: str) -> str:
@@ -851,12 +848,7 @@ class MessageHandlers:
 
     @staticmethod
     def _interval_unit_to_base(unit: str) -> str:
-        lower = unit.strip().lower()
-        if lower in {"m", "min", "mins", "minute", "minutes"}:
-            return "minutes"
-        if lower in {"h", "hr", "hrs", "hour", "hours"}:
-            return "hours"
-        return "days"
+        return interval_unit_to_base(unit)
 
     def _looks_like_scheduling_intent(self, message: str) -> bool:
         lower = message.lower()
@@ -880,56 +872,11 @@ class MessageHandlers:
 
     @staticmethod
     def _extract_json_object(raw: str) -> dict[str, Any] | None:
-        text = str(raw or "").strip()
-        if not text:
-            return None
-        cleaned = text
-        if cleaned.startswith("```"):
-            cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.IGNORECASE).strip()
-            cleaned = re.sub(r"\s*```$", "", cleaned).strip()
-        try:
-            parsed = json.loads(cleaned)
-            return parsed if isinstance(parsed, dict) else None
-        except json.JSONDecodeError:
-            start = cleaned.find("{")
-            end = cleaned.rfind("}")
-            if start == -1 or end == -1 or end <= start:
-                return None
-            try:
-                parsed = json.loads(cleaned[start : end + 1])
-                return parsed if isinstance(parsed, dict) else None
-            except json.JSONDecodeError:
-                return None
+        return extract_json_object(raw)
 
     @staticmethod
     def _normalize_weekdays_input(raw: Any) -> list[int]:
-        if not isinstance(raw, list):
-            return []
-        mapping = {
-            "mon": 0,
-            "monday": 0,
-            "tue": 1,
-            "tuesday": 1,
-            "wed": 2,
-            "wednesday": 2,
-            "thu": 3,
-            "thursday": 3,
-            "fri": 4,
-            "friday": 4,
-            "sat": 5,
-            "saturday": 5,
-            "sun": 6,
-            "sunday": 6,
-        }
-        normalized: set[int] = set()
-        for item in raw:
-            if isinstance(item, int) and 0 <= item <= 6:
-                normalized.add(item)
-                continue
-            text = str(item).strip().lower()
-            if text in mapping:
-                normalized.add(mapping[text])
-        return sorted(normalized)
+        return normalize_weekdays_input(raw)
 
     def _normalize_ai_schedule_task(
         self,
@@ -1210,12 +1157,8 @@ class MessageHandlers:
         if in_match and future_intent:
             value = int(in_match.group(1))
             unit = in_match.group(2)
-            delta = timedelta(minutes=value)
             normalized = self._interval_unit_to_base(unit)
-            if normalized == "hours":
-                delta = timedelta(hours=value)
-            elif normalized == "days":
-                delta = timedelta(days=value)
+            delta = parse_relative_delta(value, unit)
             run_at = now + delta
             task_name = f"once_{self._slug(reminder_body)}_{int(now.timestamp())}_{user_id}"
             return (
@@ -1323,6 +1266,132 @@ class MessageHandlers:
         if not ok:
             return f"{confirmation} I set it for now, but persistence is degraded ({details})."
         return confirmation
+
+    @staticmethod
+    def _is_safe_sandbox_command(command: str) -> bool:
+        stripped = command.strip()
+        if not stripped:
+            return False
+        if any(token in stripped for token in ("&&", "||", ";", "`", "$(")):
+            return False
+        allowed_prefixes = (
+            "dig ",
+            "ping ",
+            "traceroute ",
+            "nmap ",
+            "openssl ",
+            "curl ",
+            "wget ",
+            "python3 ",
+            "node ",
+            "bash ",
+        )
+        return stripped.startswith(allowed_prefixes)
+
+    def _execute_interpreted_schedule_command(
+        self,
+        command: str,
+        source_message: str,
+        user_id: int,
+        confirmation: str,
+    ) -> str:
+        if not self.scheduler:
+            return "Scheduler is currently unavailable."
+        payload_text = command[len("SCHEDULE ") :].strip()
+        task_payload = extract_json_object(payload_text)
+        if not task_payload:
+            return "I could not parse a valid schedule payload from the interpreter output."
+
+        now_utc = datetime.now(UTC)
+        task = self._normalize_ai_schedule_task(task_payload, user_id, source_message, now_utc)
+        if not task:
+            return "I could not normalize this schedule request into a valid task."
+
+        existing_names = {str(t.get("name", "")) for t in self.scheduler.get_tasks()}
+        if task["name"] in existing_names:
+            task["name"] = f"{task['name']}_{int(now_utc.timestamp())}"
+
+        self.scheduler.add_task(
+            name=str(task["name"]),
+            interval=str(task["interval"]),
+            task_type=str(task.get("type", "reminder")),
+            enabled=bool(task.get("enabled", True)),
+            **{k: v for k, v in task.items() if k not in {"name", "interval", "type", "enabled"}},
+        )
+        ok, details = self.scheduler.persist_tasks()
+        self._decision_logger.log(
+            event_type="unified_interpreter_schedule",
+            summary=f"Created task '{task['name']}'",
+            user_id=str(user_id),
+            source="telegram",
+            details={"task": task, "persisted": ok, "details": details},
+        )
+        if ok:
+            return confirmation
+        return f"{confirmation} I set it for now, but persistence is degraded ({details})."
+
+    def _execute_interpreted_sandbox_command(self, command: str, user_id: int) -> str:
+        shell_command = command[len("SANDBOX ") :].strip()
+        if not self._is_safe_sandbox_command(shell_command):
+            return "I can only run single safe sandbox commands (no command chaining)."
+
+        sandbox_ok, sandbox_reason = self._sandbox_capability()
+        if not sandbox_ok:
+            return (
+                "Sandbox is currently unavailable, so I cannot run that command now.\n"
+                f"Reason: {sandbox_reason}"
+            )
+
+        container_name = os.getenv("SANDBOX_CONTAINER_NAME", "her-sandbox")
+        result = SandboxExecutor(container_name=container_name).execute_command(shell_command, timeout=75)
+        self._decision_logger.log(
+            event_type="unified_interpreter_sandbox",
+            summary="Executed sandbox command",
+            user_id=str(user_id),
+            source="telegram",
+            details={"command": shell_command, "exit_code": result.get("exit_code"), "success": result.get("success")},
+        )
+        lines = []
+        lines.append("✅ Sandbox command executed." if result["success"] else "❌ Sandbox command failed.")
+        if result["output"]:
+            lines.append(f"Output:\n{result['output']}")
+        if result["error"]:
+            lines.append(f"Errors:\n{result['error']}")
+        lines.append(f"Exit code: {result['exit_code']} | Time: {result['execution_time']:.2f}s")
+        return "\n\n".join(lines)
+
+    def _maybe_handle_unified_request(self, message: str, user_id: int) -> str | None:
+        timezone_name = os.getenv("TZ", "UTC")
+        try:
+            decision = self._request_interpreter.interpret(message=message, user_id=user_id, timezone_name=timezone_name)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Unified interpreter unavailable for user %s: %s", user_id, exc)
+            return None
+
+        if not decision or decision.intent == "none":
+            return None
+
+        self._decision_logger.log(
+            event_type="unified_interpreter_decision",
+            summary=f"Interpreter intent={decision.intent}",
+            user_id=str(user_id),
+            source="telegram",
+            details={
+                "language": decision.language,
+                "english": decision.english,
+                "command": decision.command,
+            },
+        )
+        if decision.intent == "schedule":
+            return self._execute_interpreted_schedule_command(
+                command=decision.command,
+                source_message=message,
+                user_id=user_id,
+                confirmation=decision.confirmation,
+            )
+        if decision.intent == "sandbox":
+            return self._execute_interpreted_sandbox_command(decision.command, user_id=user_id)
+        return None
 
 
     def _build_live_context(self, message: str) -> str:
@@ -1595,6 +1664,19 @@ class MessageHandlers:
             should_reply = self._message_mentions_bot(update)
 
         if not should_reply:
+            return
+
+        unified_reply = self._maybe_handle_unified_request(message, user_id)
+        if unified_reply:
+            if wants_utc_stamp and "Timestamp (UTC):" not in unified_reply:
+                unified_reply = f"{unified_reply}\n{self._format_current_utc_line()}"
+            self.memory.update_context(str(user_id), unified_reply, "assistant")
+            if is_group:
+                self.memory.update_context(group_key, f"HER: {unified_reply}", "assistant", max_messages=120)
+            if self._metrics:
+                self._metrics.record_interaction(str(user_id), message, unified_reply)
+            self._record_reinforcement(str(user_id), message, unified_reply, task_succeeded=True)
+            await self._reply(update, unified_reply)
             return
 
         auto_schedule_reply = self._maybe_schedule_from_message(message, user_id)

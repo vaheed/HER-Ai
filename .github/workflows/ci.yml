@@ -49,7 +49,7 @@ jobs:
             context: ./dashboard
             dockerfile: dashboard/Dockerfile
           - name: her-sandbox
-            context: ./sandbox
+            context: .
             dockerfile: sandbox/Dockerfile
     steps:
       - uses: actions/checkout@v4

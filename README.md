@@ -91,6 +91,7 @@ docker compose logs -f her-bot
 - **Admin Mode**: Full access, personality tuning, memory management
 - **Public Mode**: User interactions, approval-based features
 - **Natural Scheduling**: Users can request reminders/jobs in plain language (no `/schedule` syntax required)
+- **Unified Request Interpreter**: Every message is routed through an LLM interpreter that detects language and emits executable `SCHEDULE {...}` or `SANDBOX ...` commands
 - **Example Library**: `/example` command plus 60+ ready prompts in docs for fast onboarding
 
 ### 📊 Real-Time Dashboard
@@ -130,6 +131,11 @@ HER is designed as a layered system that separates user interaction, agent orche
 ┌────────────────────▼────────────────────────────────────────┐
 │                Agent Orchestration (CrewAI)                  │
 │  Conversation · Reflection · Personality · Tool Agents       │
+└────────────────────┬────────────────────────────────────────┘
+                     │
+┌────────────────────▼────────────────────────────────────────┐
+│            Unified Interpreter & Command Router              │
+│  Detect language → normalize intent → SCHEDULE/SANDBOX       │
 └────────────────────┬────────────────────────────────────────┘
                      │
 ┌────────────────────▼────────────────────────────────────────┐
@@ -245,6 +251,22 @@ open http://localhost:8501
 
 > **📖 For complete testing procedures**, see [docs/testing_playbook.md](docs/testing_playbook.md)
 
+## 🗣️ Prompt Examples
+
+### Scheduler (multilingual)
+- English: `Remind me every 2 hours to drink water.`
+- Persian: `هر روز ساعت ۸ صبح یادآوری کن داروهام رو بخورم.`
+- Spanish: `Recuérdame mañana a las 9:30 enviar el informe.`
+
+### Sandbox / Security
+- `Run DNS lookup for openai.com.`
+- `Run nmap top ports on scanme.nmap.org.`
+- `Check SSL handshake for github.com.`
+
+### Natural-language Handlers
+- `If BTC drops 5% from current price, notify me every 10 minutes.`
+- `Track this endpoint every 5 minutes and alert on error=true: https://example.com/status`
+
 ## 🐛 Troubleshooting
 
 Common issues and solutions:
@@ -268,6 +290,7 @@ Common issues and solutions:
 - **Ollama Memory Errors**: If logs show `model requires more system memory ... than is available`, your Ollama chat model is too large for current container RAM; switch to a smaller `OLLAMA_MODEL` (or raise memory limits) to restore long-term memory writes/search quality
 - **Graceful Degradation**: If PostgreSQL/Mem0/Redis are temporarily unavailable at startup, HER now continues in degraded mode using in-process fallback memory so the agent can still reply while infra recovers
 - **Natural-Language Scheduling**: HER now first compiles scheduling requests into validated task JSON using the chat model (with provider failover), then falls back to rule-based parsing if needed
+- **Multilingual Scheduling**: The unified interpreter detects language and can schedule from non-English requests (for example Persian and Spanish)
 
 ### Telegram Connection Issues
 - Verify `TELEGRAM_BOT_TOKEN` is correct

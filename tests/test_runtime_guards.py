@@ -302,6 +302,24 @@ def test_sandbox_security_and_network_tools_are_registered() -> None:
     assert "SandboxSecurityScanTool" in tools_source
 
 
+def test_sandbox_executor_uses_external_timeout_wrapper_not_docker_timeout_kwarg() -> None:
+    sandbox_source = Path("her-core/her_mcp/sandbox_tools.py").read_text()
+    assert "timeout --signal=TERM --kill-after=5s" in sandbox_source
+    assert "self.container.exec_run(" in sandbox_source
+    assert "wrapped," in sandbox_source
+    assert "self.container.exec_run(\n                wrapped,\n                user=user,\n                workdir=workdir,\n                timeout=" not in sandbox_source
+
+
+def test_handlers_route_messages_via_unified_interpreter_first() -> None:
+    handlers_source = Path("her-core/her_telegram/handlers.py").read_text()
+    interpreter_source = Path("her-core/her_telegram/unified_interpreter.py").read_text()
+    assert "UnifiedRequestInterpreter" in handlers_source
+    assert "self._maybe_handle_unified_request(message, user_id)" in handlers_source
+    assert "SCHEDULE " in interpreter_source
+    assert "SANDBOX " in interpreter_source
+    assert "Detect language and understand non-English text." in interpreter_source
+
+
 def test_sandbox_container_emits_startup_ready_log() -> None:
     source = Path("sandbox/Dockerfile").read_text()
     assert "[sandbox] Ready:" in source

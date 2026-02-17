@@ -26,6 +26,11 @@ Use these directly in Telegram. They are short, practical, and spread across HER
 5. Next Monday at 9am remind me to review roadmap.
 6. Every 3 days remind me to back up my laptop.
 
+## 3b) Multilingual Scheduling (3)
+1. Persian: `هر روز ساعت ۸ صبح یادآوری کن داروهام رو بخورم.`
+2. Spanish: `Recuérdame mañana a las 9:30 enviar el informe.`
+3. English: `In 45 minutes remind me to join the standup.`
+
 ## 4) Natural Automation Rules (6)
 1. Check BTC every 2min and notify me if it rises 10% from current price.
 2. Track ETH every 5min and alert me if it drops 5% from baseline.
@@ -87,4 +92,3 @@ Use these directly in Telegram. They are short, practical, and spread across HER
 - `/example all` prints all built-in Telegram examples.
 - `/example <topic>` where topic is one of:
   - `chat`, `memory`, `scheduling`, `automation`, `web`, `mcp_tools`, `sandbox`, `admin`, `personality`, `productivity`
-

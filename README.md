@@ -90,9 +90,10 @@ docker compose logs -f her-bot
 ### 📱 Dual-Mode Interface
 - **Admin Mode**: Full access, personality tuning, memory management
 - **Public Mode**: User interactions, approval-based features
-- **Natural Scheduling**: Users can request reminders/jobs in plain language (no `/schedule` syntax required)
-- **Unified Request Interpreter**: Every message is routed through an LLM interpreter that detects language and emits executable `SCHEDULE {...}` or `SANDBOX ...` commands
-- **Operator-Style Prompting**: HER is prompted to turn actionable requests into objectives, propose steps, provide exact commands/code, and adapt on failures
+- **Autonomous Sandbox Loop**: Every non-command user message is executed via JSON actions in the sandbox (`command`, `write_to`, `done`)
+- **Strict JSON Action Contract**: Invalid/non-JSON LLM outputs are rejected and retried with `Invalid format. Return JSON action only.`
+- **Multilingual Operator Input**: Requests in any language are interpreted and converted into executable Linux actions
+- **Sandbox Safety Guards**: Per-command timeout, CPU limit, memory limit, and forced kill for long-running commands
 - **Example Library**: `/example` command plus 60+ ready prompts in docs for fast onboarding
 
 ### 📊 Real-Time Dashboard

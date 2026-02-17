@@ -310,14 +310,15 @@ def test_sandbox_executor_uses_external_timeout_wrapper_not_docker_timeout_kwarg
     assert "self.container.exec_run(\n                wrapped,\n                user=user,\n                workdir=workdir,\n                timeout=" not in sandbox_source
 
 
-def test_handlers_route_messages_via_unified_interpreter_first() -> None:
+def test_handlers_route_messages_via_autonomous_sandbox_operator() -> None:
     handlers_source = Path("her-core/her_telegram/handlers.py").read_text()
-    interpreter_source = Path("her-core/her_telegram/unified_interpreter.py").read_text()
-    assert "UnifiedRequestInterpreter" in handlers_source
-    assert "self._maybe_handle_unified_request(message, user_id)" in handlers_source
-    assert "SCHEDULE " in interpreter_source
-    assert "SANDBOX " in interpreter_source
-    assert "Detect language and understand non-English text." in interpreter_source
+    operator_source = Path("her-core/her_telegram/autonomous_operator.py").read_text()
+    assert "AutonomousSandboxOperator" in handlers_source
+    assert "self._autonomous_operator.execute(message, user_id)" in handlers_source
+    assert "Invalid format. Return JSON action only." in operator_source
+    assert '"background": false' in operator_source
+    assert '"write_to": "/absolute/path/file.ext"' in operator_source
+    assert '"done": true' in operator_source
 
 
 def test_sandbox_container_emits_startup_ready_log() -> None:

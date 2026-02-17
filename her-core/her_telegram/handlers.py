@@ -15,7 +15,7 @@ from telegram.ext import ContextTypes
 from agents.personality_agent import PersonalityAgent
 from her_mcp.sandbox_tools import SandboxExecutor, SandboxNetworkTool, SandboxSecurityScanTool
 from her_mcp.tools import CurlWebSearchTool
-from her_telegram.unified_interpreter import UnifiedRequestInterpreter
+from her_telegram.autonomous_operator import AutonomousSandboxOperator
 from her_telegram.keyboards import get_admin_menu, get_personality_adjustment
 from her_telegram.rate_limiter import RateLimiter
 from memory.mem0_client import HERMemory
@@ -176,8 +176,17 @@ class MessageHandlers:
             if fallback_enabled and self._fallback_provider != self._llm_provider
             else None
         )
+        sandbox_container_name = os.getenv("SANDBOX_CONTAINER_NAME", "her-sandbox")
+        self._autonomous_operator = AutonomousSandboxOperator(
+            llm_invoke=self._generate_response_with_failover,
+            container_name=sandbox_container_name,
+            max_steps=int(os.getenv("HER_AUTONOMOUS_MAX_STEPS", "16")),
+            command_timeout_seconds=int(os.getenv("HER_SANDBOX_COMMAND_TIMEOUT_SECONDS", "60")),
+            cpu_time_limit_seconds=int(os.getenv("HER_SANDBOX_CPU_TIME_LIMIT_SECONDS", "20")),
+            memory_limit_mb=int(os.getenv("HER_SANDBOX_MEMORY_LIMIT_MB", "512")),
+        )
+        self._request_interpreter = None
         self._web_search_tool = CurlWebSearchTool()
-        self._request_interpreter = UnifiedRequestInterpreter(self._generate_response_with_failover)
         self._decision_logger = DecisionLogger()
         self._reinforcement = ReinforcementEngine()
         self._metrics: HERMetrics | None = None
@@ -1361,6 +1370,8 @@ class MessageHandlers:
         return "\n\n".join(lines)
 
     def _maybe_handle_unified_request(self, message: str, user_id: int) -> str | None:
+        if self._request_interpreter is None:
+            return None
         timezone_name = os.getenv("TZ", "UTC")
         try:
             decision = self._request_interpreter.interpret(message=message, user_id=user_id, timezone_name=timezone_name)
@@ -1677,121 +1688,24 @@ class MessageHandlers:
         if not should_reply:
             return
 
-        unified_reply = self._maybe_handle_unified_request(message, user_id)
-        if unified_reply:
-            if wants_utc_stamp and "Timestamp (UTC):" not in unified_reply:
-                unified_reply = f"{unified_reply}\n{self._format_current_utc_line()}"
-            self.memory.update_context(str(user_id), unified_reply, "assistant")
-            if is_group:
-                self.memory.update_context(group_key, f"HER: {unified_reply}", "assistant", max_messages=120)
-            if self._metrics:
-                self._metrics.record_interaction(str(user_id), message, unified_reply)
-            self._record_reinforcement(str(user_id), message, unified_reply, task_succeeded=True)
-            await self._reply(update, unified_reply)
-            return
-
-        auto_schedule_reply = self._maybe_schedule_from_message(message, user_id)
-        if auto_schedule_reply:
-            if wants_utc_stamp and "Timestamp (UTC):" not in auto_schedule_reply:
-                auto_schedule_reply = f"{auto_schedule_reply}\n{self._format_current_utc_line()}"
-            self.memory.update_context(str(user_id), auto_schedule_reply, "assistant")
-            if is_group:
-                self.memory.update_context(group_key, f"HER: {auto_schedule_reply}", "assistant", max_messages=120)
-            if self._metrics:
-                self._metrics.record_interaction(str(user_id), message, auto_schedule_reply)
-            self._record_reinforcement(str(user_id), message, auto_schedule_reply, task_succeeded=True)
-            await self._reply(update, auto_schedule_reply)
-            return
-
         try:
             await context.bot.send_chat_action(chat_id=chat_id, action="typing")
         except (TimedOut, NetworkError) as exc:
             logger.warning("Telegram typing indicator failed for chat %s: %s", chat_id, exc)
 
-        realtime_response = self._maybe_answer_realtime_query(message)
-        if realtime_response:
-            if wants_utc_stamp and "Timestamp (UTC):" not in realtime_response:
-                realtime_response = f"{realtime_response}\n{self._format_current_utc_line()}"
-            self.memory.update_context(str(user_id), realtime_response, "assistant")
-            if is_group:
-                self.memory.update_context(group_key, f"HER: {realtime_response}", "assistant", max_messages=120)
-            if self._metrics:
-                self._metrics.record_interaction(str(user_id), message, realtime_response)
-            self._record_reinforcement(str(user_id), message, realtime_response, task_succeeded=True)
-            await self._reply(update, realtime_response)
-            return
-
-        sandbox_security_response = self._maybe_answer_sandbox_security_query(message)
-        if sandbox_security_response:
-            if wants_utc_stamp and "Timestamp (UTC):" not in sandbox_security_response:
-                sandbox_security_response = f"{sandbox_security_response}\n{self._format_current_utc_line()}"
-            self.memory.update_context(str(user_id), sandbox_security_response, "assistant")
-            if is_group:
-                self.memory.update_context(group_key, f"HER: {sandbox_security_response}", "assistant", max_messages=120)
-            if self._metrics:
-                self._metrics.record_interaction(str(user_id), message, sandbox_security_response)
-            self._record_reinforcement(str(user_id), message, sandbox_security_response, task_succeeded=True)
-            await self._reply(update, sandbox_security_response)
-            return
-
-        memories = self.memory.search_memories(str(user_id), message, limit=5)
-        if is_group:
-            memories.extend(self.memory.search_memories(group_key, message, limit=5))
-
-        user_context = self.memory.get_context(str(user_id))
-        group_context = self.memory.get_context(group_key) if is_group else []
-        live_context = self._build_live_context(message)
-        prompt = self._build_reply_prompt(str(user_id), message, user_context, group_context, memories, live_context)
-
-        llm_messages = [
-            SystemMessage(
-                content=(
-                    "You are HER. Warm, empathetic, practical, concise. "
-                    "Be truthful about runtime capabilities. "
-                    "If you include code, always format it in fenced code blocks. "
-                    "If live context indicates internet capability is available or includes fresh web results, "
-                    "do not claim you have no internet access. "
-                    "For actionable requests, act like an operator: objective, plan, exact commands/code, "
-                    "adaptation on failure, and strong execution bias."
-                )
-            ),
-            HumanMessage(content=prompt),
-        ]
-        used_fallback = False
         try:
-            response, used_fallback = self._generate_response_with_failover(llm_messages, user_id)
+            final_action = self._autonomous_operator.execute(message, user_id)
+            response = json.dumps(final_action, ensure_ascii=False)
         except Exception as exc:  # noqa: BLE001
-            logger.exception("Failed to generate response for user %s: %s", user_id, exc)
-            response = self._build_transient_llm_error_reply(exc)
-
-        if not response:
-            response = "I am here with you. Tell me a little more and I will help."
-
-        caps = self._get_runtime_capabilities()
-        internet_available = bool(
-            ((caps.get("capabilities", {}) or {}).get("internet", {}) or {}).get("available")
-        )
-        if internet_available and _INTERNET_DENIAL_PATTERN.search(response):
-            response += "\n\nNote: runtime checks show internet is currently available."
-        proactive_hint = self._maybe_recurring_suggestion(message)
-        if proactive_hint and proactive_hint.lower() not in response.lower():
-            response = f"{response}\n\n{proactive_hint}"
-        if wants_utc_stamp and "Timestamp (UTC):" not in response and "Right now (UTC):" not in response:
-            response = f"{response}\n\n{self._format_current_utc_line()}"
-        if used_fallback:
-            logger.info(
-                "LLM response for user %s served via fallback provider '%s'.",
-                user_id,
-                self._fallback_provider,
-            )
+            logger.exception("Autonomous sandbox execution failed for user %s: %s", user_id, exc)
+            response = json.dumps({"done": True, "result": "Autonomous execution failed."}, ensure_ascii=False)
 
         self.memory.update_context(str(user_id), response, "assistant")
         if is_group:
             self.memory.update_context(group_key, f"HER: {response}", "assistant", max_messages=120)
         if self._metrics:
             self._metrics.record_interaction(str(user_id), message, response)
-        task_succeeded = "temporary issue" not in response.lower()
-        self._record_reinforcement(str(user_id), message, response, task_succeeded=task_succeeded)
+        self._record_reinforcement(str(user_id), message, response, task_succeeded=True)
         if previous_assistant_message:
             # Evaluate user reaction to previous assistant message as evidence-based feedback.
             self._record_reinforcement(
@@ -1802,10 +1716,10 @@ class MessageHandlers:
             )
         self._decision_logger.log(
             event_type="assistant_response",
-            summary="Generated assistant response",
+            summary="Generated autonomous JSON response",
             user_id=str(user_id),
             source="telegram",
-            details={"has_live_context": bool(live_context), "message_preview": message[:120]},
+            details={"message_preview": message[:120], "wants_utc_stamp": wants_utc_stamp},
         )
         await self._reply(update, response)
 

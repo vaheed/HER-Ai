@@ -15,6 +15,7 @@ import logging
 import os
 import shlex
 import time
+import base64
 from datetime import datetime, timezone
 from typing import Any
 
@@ -69,6 +70,8 @@ class SandboxExecutor:
         timeout: int = 30,
         workdir: str = "/workspace",
         user: str = "sandbox",
+        cpu_time_limit_seconds: int = 20,
+        memory_limit_mb: int = 512,
     ) -> dict[str, Any]:
         """
         Execute a command in the sandbox container.
@@ -85,10 +88,12 @@ class SandboxExecutor:
         start_time = time.time()
         try:
             # Docker SDK exec_run does not support a "timeout" kwarg consistently across versions.
-            # Enforce execution timeout inside the sandbox with GNU timeout.
-            wrapped = (
-                f"timeout --signal=TERM --kill-after=5s {max(1, int(timeout))}s "
-                f"bash -lc {shlex.quote(command)}"
+            # Enforce execution timeout and process limits inside the sandbox.
+            wrapped = self._build_limited_command(
+                command=command,
+                timeout=max(1, int(timeout)),
+                cpu_time_limit_seconds=max(1, int(cpu_time_limit_seconds)),
+                memory_limit_mb=max(64, int(memory_limit_mb)),
             )
             result = self.container.exec_run(
                 wrapped,
@@ -125,6 +130,57 @@ class SandboxExecutor:
             }
             self._log_execution(command, result_dict, user, workdir)
             return result_dict
+
+    @staticmethod
+    def _build_limited_command(
+        command: str,
+        timeout: int,
+        cpu_time_limit_seconds: int,
+        memory_limit_mb: int,
+    ) -> str:
+        memory_kb = max(65536, int(memory_limit_mb) * 1024)
+        inner = (
+            f"ulimit -t {max(1, int(cpu_time_limit_seconds))}; "
+            f"ulimit -v {memory_kb}; "
+            f"{command}"
+        )
+        return (
+            f"timeout --signal=TERM --kill-after=5s {max(1, int(timeout))}s "
+            f"bash -lc {shlex.quote(inner)}"
+        )
+
+    def write_file(
+        self,
+        path: str,
+        code: str,
+        timeout: int = 30,
+        workdir: str = "/workspace",
+        user: str = "sandbox",
+        cpu_time_limit_seconds: int = 10,
+        memory_limit_mb: int = 256,
+    ) -> dict[str, Any]:
+        if not path or not path.startswith("/"):
+            return {
+                "success": False,
+                "output": "",
+                "error": "write_to must be an absolute path",
+                "exit_code": -1,
+                "execution_time": 0.0,
+            }
+        encoded = base64.b64encode(code.encode("utf-8")).decode("ascii")
+        parent_dir = os.path.dirname(path) or "/"
+        command = (
+            f"mkdir -p {shlex.quote(parent_dir)} && "
+            f"printf %s {shlex.quote(encoded)} | base64 -d > {shlex.quote(path)}"
+        )
+        return self.execute_command(
+            command=command,
+            timeout=timeout,
+            workdir=workdir,
+            user=user,
+            cpu_time_limit_seconds=cpu_time_limit_seconds,
+            memory_limit_mb=memory_limit_mb,
+        )
 
     def _log_execution(self, command: str, result: dict[str, Any], user: str, workdir: str):
         """Log execution to Redis metrics if available."""

@@ -57,6 +57,10 @@ class AppConfig:
     telegram_public_rate_limit_per_minute: int = int(os.getenv("TELEGRAM_PUBLIC_RATE_LIMIT_PER_MINUTE", "20"))
     telegram_enabled: bool = _env_bool("TELEGRAM_ENABLED", True)
     telegram_startup_retry_delay_seconds: int = int(os.getenv("TELEGRAM_STARTUP_RETRY_DELAY_SECONDS", "10"))
+    autonomous_max_steps: int = int(os.getenv("HER_AUTONOMOUS_MAX_STEPS", "16"))
+    sandbox_command_timeout_seconds: int = int(os.getenv("HER_SANDBOX_COMMAND_TIMEOUT_SECONDS", "60"))
+    sandbox_cpu_time_limit_seconds: int = int(os.getenv("HER_SANDBOX_CPU_TIME_LIMIT_SECONDS", "20"))
+    sandbox_memory_limit_mb: int = int(os.getenv("HER_SANDBOX_MEMORY_LIMIT_MB", "512"))
     startup_warmup_enabled: bool = _env_bool("STARTUP_WARMUP_ENABLED", False)
 
     log_level: str = os.getenv("LOG_LEVEL", "INFO")

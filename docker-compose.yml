@@ -10,6 +10,7 @@ services:
     ports:
     - 8000:8000
     - 8081:8081
+    - 8082:8082
     depends_on:
       postgres:
         condition: service_healthy
@@ -50,6 +51,9 @@ services:
     - WORKFLOW_DEBUG_SERVER_ENABLED
     - WORKFLOW_DEBUG_HOST
     - WORKFLOW_DEBUG_PORT
+    - API_ADAPTER_ENABLED
+    - API_ADAPTER_HOST
+    - API_ADAPTER_PORT
     - TZ
     volumes:
     - her_config:/app/config

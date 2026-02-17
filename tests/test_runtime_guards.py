@@ -450,3 +450,27 @@ def test_known_crewai_pydantic_mix_warning_is_suppressed() -> None:
     assert "warnings.filterwarnings(" in source
     assert "CrewAgentExecutor" in source
     assert "pydantic\\._internal\\._generate_schema" in source
+
+
+def test_openapi_adapter_can_run_without_telegram() -> None:
+    main_source = Path("her-core/main.py").read_text()
+    config_source = Path("her-core/config.py").read_text()
+    env_example = Path(".env.example").read_text()
+    compose_source = Path("docker-compose.yml").read_text()
+    adapter_source = Path("her-core/api_adapter/server.py").read_text()
+    handlers_source = Path("her-core/her_telegram/handlers.py").read_text()
+
+    assert "OpenAPIAdapterServer" in main_source
+    assert "handler=bot.handlers.process_message_api" in main_source
+    assert "api_adapter_enabled" in config_source
+    assert "API_ADAPTER_ENABLED=true" in env_example
+    assert "API_ADAPTER_PORT=8082" in env_example
+    assert "API_ADAPTER_BEARER_TOKEN=" in env_example
+    assert "API_ADAPTER_MODEL_NAME=her-chat-1" in env_example
+    assert "- 8082:8082" in compose_source
+    assert "/api/openapi.json" in adapter_source
+    assert "/api/v1/chat" in adapter_source
+    assert "/v1/models" in adapter_source
+    assert "/v1/chat/completions" in adapter_source
+    assert "Authorization" in adapter_source
+    assert "async def process_message_api(" in handlers_source

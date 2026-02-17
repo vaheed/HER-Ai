@@ -43,6 +43,11 @@ Configuration is driven by environment variables in `.env` and YAML files under 
 | `WORKFLOW_DEBUG_SERVER_ENABLED` | `true` | Enable realtime workflow DAG server |
 | `WORKFLOW_DEBUG_HOST` | `0.0.0.0` | Workflow debug server bind host |
 | `WORKFLOW_DEBUG_PORT` | `8081` | Workflow debug server port |
+| `API_ADAPTER_ENABLED` | `true` | Enable HTTP OpenAPI adapter |
+| `API_ADAPTER_HOST` | `0.0.0.0` | OpenAPI adapter bind host |
+| `API_ADAPTER_PORT` | `8082` | OpenAPI adapter port |
+| `API_ADAPTER_BEARER_TOKEN` | `` | Optional bearer token required by API adapter endpoints |
+| `API_ADAPTER_MODEL_NAME` | `her-chat-1` | OpenAI-compatible model id exposed by `/v1/models` |
 | `TELEGRAM_ENABLED` | `true` | Enable/disable Telegram polling |
 | `TELEGRAM_BOT_TOKEN` | - | Telegram bot token |
 | `TELEGRAM_STARTUP_RETRY_DELAY_SECONDS` | `10` | Retry delay for transient Telegram network errors |

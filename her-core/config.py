@@ -65,6 +65,11 @@ class AppConfig:
     workflow_debug_server_enabled: bool = _env_bool("WORKFLOW_DEBUG_SERVER_ENABLED", True)
     workflow_debug_host: str = os.getenv("WORKFLOW_DEBUG_HOST", "0.0.0.0")
     workflow_debug_port: int = int(os.getenv("WORKFLOW_DEBUG_PORT", "8081"))
+    api_adapter_enabled: bool = _env_bool("API_ADAPTER_ENABLED", True)
+    api_adapter_host: str = os.getenv("API_ADAPTER_HOST", "0.0.0.0")
+    api_adapter_port: int = int(os.getenv("API_ADAPTER_PORT", "8082"))
+    api_adapter_bearer_token: str = os.getenv("API_ADAPTER_BEARER_TOKEN", "")
+    api_adapter_model_name: str = os.getenv("API_ADAPTER_MODEL_NAME", "her-chat-1")
 
     log_level: str = os.getenv("LOG_LEVEL", "INFO")
     environment: str = os.getenv("ENVIRONMENT", "development")

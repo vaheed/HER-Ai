@@ -39,6 +39,7 @@ docker compose up -d --build
 docker compose ps
 curl -sS http://localhost:8000
 curl -sS http://localhost:8081/workflow/health
+curl -sS http://localhost:8082/api/health
 ```
 
 ## Platform-Specific Notes
@@ -48,6 +49,7 @@ curl -sS http://localhost:8081/workflow/health
 - Use Docker Desktop.
 - Increase memory allocation in Docker Desktop settings if Ollama model load fails.
 - Access dashboard: `http://localhost:8501`.
+- OpenAPI docs: `http://localhost:8082/api/docs`.
 
 ## Linux
 
@@ -61,6 +63,7 @@ curl -sS http://localhost:8081/workflow/health
 - Run commands in WSL terminal for path consistency.
 - Ensure port mappings `8000`, `8501`, `11434` are available.
 - Ensure port mapping `8081` is available if workflow debugger is enabled.
+- Ensure port mapping `8082` is available if OpenAPI adapter is enabled.
 
 ## Optional Local (No Docker) Setup
 
@@ -85,6 +88,33 @@ pytest -q
 - Bot service logs: `docker compose logs --tail=200 her-bot`
 - Dashboard logs: `docker compose logs --tail=200 dashboard`
 - Sandbox tool check: `docker compose exec sandbox check_pentest_tools`
+
+## Connect OpenWebUI (OpenAI-Compatible)
+
+HER exposes OpenAI-style endpoints for easy UI integration:
+- `GET /v1/models`
+- `POST /v1/chat/completions`
+
+Base URL:
+```text
+http://localhost:8082
+```
+
+OpenWebUI provider setup:
+1. Set API base URL to `http://host.docker.internal:8082` when OpenWebUI runs in Docker (or `http://localhost:8082` when local).
+2. Set API key:
+   - If `API_ADAPTER_BEARER_TOKEN` is set in HER, use the same value.
+   - If empty, you can use any placeholder key.
+3. Select model: `her-chat-1` (or your `API_ADAPTER_MODEL_NAME`).
+
+Quick connectivity checks:
+```bash
+curl -sS http://localhost:8082/v1/models
+curl -sS http://localhost:8082/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $API_ADAPTER_BEARER_TOKEN" \
+  -d '{"model":"her-chat-1","messages":[{"role":"user","content":"hello"}]}'
+```
 
 ## Troubleshooting Quick List
 

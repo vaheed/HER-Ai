@@ -101,6 +101,8 @@ Detailed setup: `docs/installation.md`
 - Autonomous action loop using strict JSON action contracts
 - Multilingual request interpretation and scheduling support
 - Prompt library via `/example`
+- OpenAPI adapter for non-Telegram clients (`/api/v1/chat`, Swagger docs)
+- OpenAI-compatible API (`/v1/models`, `/v1/chat/completions`) for OpenWebUI and similar chat UIs
 
 ### Real-Time Dashboard
 
@@ -205,6 +207,12 @@ SANDBOX_CONTAINER_NAME=her-sandbox
 HER_CONFIG_DIR=/app/config
 DOCKER_GID=998
 TZ=UTC
+
+# API adapter
+API_ADAPTER_ENABLED=true
+API_ADAPTER_PORT=8082
+API_ADAPTER_MODEL_NAME=her-chat-1
+API_ADAPTER_BEARER_TOKEN=
 ```
 
 Full reference: `docs/configuration.md` and `.env.example`
@@ -231,6 +239,8 @@ Quick checks:
 pytest -q
 curl -sS http://localhost:8000
 curl -sS http://localhost:8081/workflow/health
+curl -sS http://localhost:8082/api/health
+curl -sS http://localhost:8082/v1/models
 docker compose logs -f her-bot
 docker compose exec sandbox check_pentest_tools
 ```

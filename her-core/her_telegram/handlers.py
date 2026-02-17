@@ -2142,6 +2142,350 @@ class MessageHandlers:
             await self._reply(update, final_text[:3900])
         return final_text
 
+    async def process_message_api(
+        self,
+        user_id: int,
+        message: str,
+        chat_id: int | None = None,
+        debug: bool = False,
+    ) -> dict[str, Any]:
+        message = str(message or "").strip()
+        if not message:
+            raise ValueError("Message cannot be empty")
+
+        chat_id = chat_id if chat_id is not None else user_id
+        execution_id = (
+            self._workflow_event_hub.create_execution(user_id=str(user_id), message=message)
+            if self._workflow_event_hub
+            else None
+        )
+        request_started_at = time.perf_counter()
+        self._emit_workflow_event(
+            execution_id=execution_id,
+            event_type="message_received",
+            node_id="input",
+            status="success",
+            details={"message": message, "source": "api"},
+        )
+
+        memory_start = time.perf_counter()
+        self._emit_workflow_event(
+            execution_id=execution_id,
+            event_type="tool_execution_started",
+            node_id="memory_lookup",
+            status="running",
+            details={"phase": "initial_context"},
+        )
+        previous_context = self.memory.get_context(str(user_id))
+        previous_assistant_message = self._last_assistant_message(previous_context)
+        self._log_stage_timing(user_id, "memory_lookup", memory_start, {"context_size": len(previous_context)})
+        self._emit_workflow_event(
+            execution_id=execution_id,
+            event_type="tool_completed",
+            node_id="memory_lookup",
+            status="success",
+            details={
+                "phase": "initial_context",
+                "duration_ms": round((time.perf_counter() - memory_start) * 1000.0, 2),
+                "context_size": len(previous_context),
+            },
+        )
+
+        user_language = self._detect_user_language(message, user_id, previous_context)
+
+        if not self.is_admin(user_id) and not self.rate_limiter.is_allowed(user_id):
+            response = self._render_in_user_language(user_id, user_language, "⏱️ Please slow down a bit!")
+            return {
+                "execution_id": execution_id or "",
+                "response": response,
+                "mode": CHAT_MODE,
+                "language": user_language,
+                "scheduled_tasks": 0,
+                "task_succeeded": False,
+                "total_latency_ms": round((time.perf_counter() - request_started_at) * 1000.0, 2),
+            }
+
+        self.memory.update_context(str(user_id), message, "user")
+        intent = self._classify_intent(message)
+        self._emit_workflow_event(
+            execution_id=execution_id,
+            event_type="intent_detected",
+            node_id="intent_classifier",
+            status="success",
+            details={
+                "mode": intent["mode"],
+                "action_confidence": intent["action_confidence"],
+                "has_schedule_word": intent["has_schedule_word"],
+            },
+        )
+
+        response = ""
+        task_succeeded = True
+        schedule_count = 0
+
+        try:
+            if intent["mode"] == ACTION_MODE:
+                explicit_schedule = self._explicitly_requests_scheduling(message)
+                if explicit_schedule and self.scheduler:
+                    self._emit_workflow_event(
+                        execution_id=execution_id,
+                        event_type="tool_selected",
+                        node_id="tool_selector",
+                        status="success",
+                        details={"selected": "scheduler"},
+                    )
+                    scheduler_start = time.perf_counter()
+                    all_scheduled_tasks, _ = self._parse_multi_intent_schedule_with_llm(
+                        message=message,
+                        user_id=user_id,
+                        language=user_language,
+                        context_rows=previous_context,
+                    )
+                    response_parts: list[str] = []
+                    existing_names = {str(t.get("name", "")) for t in self.scheduler.get_tasks()}
+                    for task in all_scheduled_tasks:
+                        task_name = str(task.get("name", "task"))
+                        if task_name in existing_names:
+                            task_name = f"{task_name}_{int(datetime.now(UTC).timestamp())}"
+                            task["name"] = task_name
+                        existing_names.add(task_name)
+                        self.scheduler.add_task(
+                            name=task_name,
+                            interval=str(task.get("interval", "once")),
+                            task_type=str(task.get("type", "reminder")),
+                            enabled=bool(task.get("enabled", True)),
+                            **{k: v for k, v in task.items() if k not in {"name", "interval", "type", "enabled"}},
+                        )
+                        response_parts.append(
+                            self._build_scheduler_confirmation(
+                                user_id=user_id,
+                                language=user_language,
+                                original_request=message,
+                                task=task,
+                                context_rows=previous_context,
+                            )
+                        )
+                    ok, details = self.scheduler.persist_tasks()
+                    self._log_stage_timing(
+                        user_id,
+                        "scheduler",
+                        scheduler_start,
+                        {"created_tasks": len(all_scheduled_tasks), "persisted": ok},
+                    )
+                    if not ok:
+                        response_parts.append(f"Scheduler persistence is degraded: {details}")
+                    response = "\n".join(part for part in response_parts if part).strip()
+                    schedule_count = len(all_scheduled_tasks)
+                    task_succeeded = ok or bool(all_scheduled_tasks)
+                else:
+                    command = self._extract_immediate_shell_command(message)
+                    if command and self._is_safe_sandbox_command(command):
+                        self._emit_workflow_event(
+                            execution_id=execution_id,
+                            event_type="tool_selected",
+                            node_id="tool_selector",
+                            status="success",
+                            details={"selected": "sandbox_executor", "command": command},
+                        )
+                        tool_start = time.perf_counter()
+                        self._emit_workflow_event(
+                            execution_id=execution_id,
+                            event_type="tool_execution_started",
+                            node_id="tool_executor",
+                            status="running",
+                            details={"command": command},
+                        )
+                        result = SandboxExecutor(
+                            container_name=os.getenv("SANDBOX_CONTAINER_NAME", "her-sandbox")
+                        ).execute_command(
+                            command=command,
+                            timeout=int(os.getenv("HER_SANDBOX_COMMAND_TIMEOUT_SECONDS", "30")),
+                        )
+                        output = str(result.get("output", "")).strip()
+                        error = str(result.get("error", "")).strip()
+                        for line in output.splitlines():
+                            self._emit_workflow_event(
+                                execution_id=execution_id,
+                                event_type="tool_stdout",
+                                node_id="tool_executor",
+                                status="running",
+                                details={"line": line, "stream": "stdout"},
+                            )
+                        for line in error.splitlines():
+                            self._emit_workflow_event(
+                                execution_id=execution_id,
+                                event_type="tool_stdout",
+                                node_id="tool_executor",
+                                status="running",
+                                details={"line": line, "stream": "stderr"},
+                            )
+                        self._emit_workflow_event(
+                            execution_id=execution_id,
+                            event_type="tool_completed",
+                            node_id="tool_executor",
+                            status="success" if result.get("success") else "error",
+                            details={
+                                "command": command,
+                                "exit_code": result.get("exit_code"),
+                                "duration_ms": round((time.perf_counter() - tool_start) * 1000.0, 2),
+                                "tool_output": output[-5000:],
+                                "tool_error": error[-2000:],
+                            },
+                        )
+                        response_lines = [
+                            "✅ Command executed." if result.get("success") else f"❌ Command failed (exit={result.get('exit_code')})."
+                        ]
+                        if output:
+                            response_lines.append(f"Output:\n{output}")
+                        if error:
+                            response_lines.append(f"Errors:\n{error}")
+                        response_lines.append(f"Time: {float(result.get('execution_time', 0.0)):.2f}s")
+                        response = "\n\n".join(response_lines)[:3900]
+                        task_succeeded = bool(result.get("success"))
+                    else:
+                        intent["mode"] = CHAT_MODE
+                if not response.strip():
+                    intent["mode"] = CHAT_MODE
+
+            if intent["mode"] == CHAT_MODE:
+                self._emit_workflow_event(
+                    execution_id=execution_id,
+                    event_type="tool_selected",
+                    node_id="tool_selector",
+                    status="success",
+                    details={"selected": "llm_chat"},
+                )
+                mem_search_start = time.perf_counter()
+                self._emit_workflow_event(
+                    execution_id=execution_id,
+                    event_type="tool_execution_started",
+                    node_id="memory_lookup",
+                    status="running",
+                    details={"phase": "semantic_search"},
+                )
+                related_memories = self.memory.search_memories(str(user_id), message, limit=5)
+                self._log_stage_timing(user_id, "memory_lookup", mem_search_start, {"search_results": len(related_memories)})
+                self._emit_workflow_event(
+                    execution_id=execution_id,
+                    event_type="tool_completed",
+                    node_id="memory_lookup",
+                    status="success",
+                    details={
+                        "phase": "semantic_search",
+                        "search_results": len(related_memories),
+                        "duration_ms": round((time.perf_counter() - mem_search_start) * 1000.0, 2),
+                    },
+                )
+                live_context = self._build_live_context(message)
+                prompt = self._build_reply_prompt(
+                    user_id=str(user_id),
+                    message=message,
+                    user_context=self.memory.get_context(str(user_id)),
+                    group_context=[],
+                    memories=related_memories,
+                    live_context=live_context,
+                )
+                llm_messages = [
+                    SystemMessage(content="You are HER. If user message is conversational, respond conversationally."),
+                    HumanMessage(content=prompt),
+                ]
+                llm_start = time.perf_counter()
+                self._emit_workflow_event(
+                    execution_id=execution_id,
+                    event_type="llm_started",
+                    node_id="llm",
+                    status="running",
+                    details={
+                        "provider": self._llm_provider,
+                        "raw_messages": [str(getattr(msg, "content", "")) for msg in llm_messages],
+                    },
+                )
+                response, used_fallback = self._generate_response_with_failover(llm_messages, user_id)
+                token_budget = 500
+                for idx, token in enumerate(re.findall(r"\\S+\\s*", response)):
+                    if idx >= token_budget:
+                        break
+                    self._emit_workflow_event(
+                        execution_id=execution_id,
+                        event_type="llm_stream_token",
+                        node_id="llm",
+                        status="running",
+                        details={"token": token},
+                    )
+                self._emit_workflow_event(
+                    execution_id=execution_id,
+                    event_type="llm_completed",
+                    node_id="llm",
+                    status="success" if response.strip() else "error",
+                    details={
+                        "used_fallback": used_fallback,
+                        "duration_ms": round((time.perf_counter() - llm_start) * 1000.0, 2),
+                    },
+                )
+                response = (response or "").strip() or "I am here with you."
+
+        except Exception as exc:  # noqa: BLE001
+            self._emit_workflow_event(
+                execution_id=execution_id,
+                event_type="error",
+                node_id="response",
+                status="error",
+                details={"error": str(exc)},
+            )
+            logger.exception("API message handling failed for user %s: %s", user_id, exc)
+            response = self._build_transient_llm_error_reply(exc)
+            task_succeeded = False
+
+        self.memory.update_context(str(user_id), response, "assistant")
+        if self._metrics:
+            self._metrics.record_interaction(str(user_id), message, response)
+        self._record_reinforcement(str(user_id), message, response, task_succeeded=task_succeeded)
+        if previous_assistant_message:
+            self._record_reinforcement(
+                str(user_id),
+                user_message=message,
+                assistant_message=previous_assistant_message,
+                task_succeeded=task_succeeded,
+            )
+
+        total_latency_ms = round((time.perf_counter() - request_started_at) * 1000.0, 2)
+        self._emit_workflow_event(
+            execution_id=execution_id,
+            event_type="response_sent",
+            node_id="response",
+            status="success" if task_succeeded else "error",
+            details={
+                "response_preview": response[:500],
+                "total_latency_ms": total_latency_ms,
+                "debug": debug,
+            },
+        )
+        self._decision_logger.log(
+            event_type="assistant_response_api",
+            summary="Handled API message with strict intent routing",
+            user_id=str(user_id),
+            source="api",
+            details={
+                "message_preview": message[:120],
+                "language": user_language,
+                "mode": intent["mode"],
+                "action_confidence": intent["action_confidence"],
+                "scheduled_tasks": schedule_count,
+                "execution_id": execution_id,
+            },
+        )
+
+        return {
+            "execution_id": execution_id or "",
+            "response": response,
+            "mode": intent["mode"],
+            "language": user_language,
+            "scheduled_tasks": schedule_count,
+            "task_succeeded": task_succeeded,
+            "total_latency_ms": total_latency_ms,
+            "debug": debug,
+        }
+
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not update.message or not update.effective_user:
             return

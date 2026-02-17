@@ -12,6 +12,7 @@ import yaml
 from dotenv import load_dotenv
 
 from agents import ConversationAgent, PersonalityAgent, ReflectionAgent
+from api_adapter import OpenAPIAdapterServer
 from config import AppConfig
 from her_mcp.manager import MCPManager
 from her_mcp.tools import MCPToolsIntegration
@@ -162,6 +163,7 @@ async def async_main(config: AppConfig) -> None:
 
     workflow_hub: WorkflowEventHub | None = None
     workflow_server: WorkflowServer | None = None
+    api_adapter_server: OpenAPIAdapterServer | None = None
     if config.workflow_debug_server_enabled:
         workflow_hub = WorkflowEventHub()
         workflow_server = WorkflowServer(
@@ -206,6 +208,15 @@ async def async_main(config: AppConfig) -> None:
         group_summary_every_messages=features.get("group_summary_every_messages", 25),
         workflow_event_hub=workflow_hub,
     )
+    if config.api_adapter_enabled:
+        api_adapter_server = OpenAPIAdapterServer(
+            handler=bot.handlers.process_message_api,
+            host=config.api_adapter_host,
+            port=config.api_adapter_port,
+            bearer_token=config.api_adapter_bearer_token,
+            model_name=config.api_adapter_model_name,
+        )
+        await api_adapter_server.start()
 
     # Start task scheduler
     await scheduler.start()
@@ -238,6 +249,8 @@ async def async_main(config: AppConfig) -> None:
     finally:
         await scheduler.stop()
         await bot.stop()
+        if api_adapter_server is not None:
+            await api_adapter_server.stop()
         if workflow_server is not None:
             await workflow_server.stop()
         if mcp_manager is not None:

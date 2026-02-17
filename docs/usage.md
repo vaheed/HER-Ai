@@ -4,6 +4,7 @@
 
 - Telegram bot for user/admin interactions (`her-core/her_telegram/handlers.py`)
 - Streamlit dashboard for operations (`dashboard/app.py`)
+- OpenAPI adapter for external chat UIs (`her-core/api_adapter/server.py`)
 
 ## Basic User Workflow
 
@@ -75,3 +76,32 @@ Open `http://localhost:8501` and use pages for:
 - Health
 
 Detailed operations: `docs/admin-tooling.md`.
+
+## OpenAI-Compatible API Workflow
+
+Use base URL:
+```text
+http://localhost:8082
+```
+
+Model discovery:
+```bash
+curl -sS http://localhost:8082/v1/models \
+  -H "Authorization: Bearer $API_ADAPTER_BEARER_TOKEN"
+```
+
+Chat completion:
+```bash
+curl -sS http://localhost:8082/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $API_ADAPTER_BEARER_TOKEN" \
+  -d '{"model":"her-chat-1","messages":[{"role":"user","content":"run mtr on vaheed.net"}]}'
+```
+
+Streaming completion:
+```bash
+curl -N http://localhost:8082/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $API_ADAPTER_BEARER_TOKEN" \
+  -d '{"model":"her-chat-1","stream":true,"messages":[{"role":"user","content":"hello"}]}'
+```

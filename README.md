@@ -107,6 +107,7 @@ Detailed setup: `docs/installation.md`
 - System and capability monitoring
 - Memory, scheduler, and execution visibility
 - Logs, decisions, metrics, and health views
+- Realtime workflow graph (n8n-style) via `http://localhost:8081/workflow?debug=true`
 
 ## Documentation
 
@@ -229,6 +230,7 @@ Quick checks:
 ```bash
 pytest -q
 curl -sS http://localhost:8000
+curl -sS http://localhost:8081/workflow/health
 docker compose logs -f her-bot
 docker compose exec sandbox check_pentest_tools
 ```

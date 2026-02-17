@@ -20,6 +20,7 @@ from her_telegram.bot import HERBot
 from her_telegram.rate_limiter import RateLimiter
 from utils.config_paths import resolve_config_file
 from utils.scheduler import get_scheduler
+from workflow import WorkflowEventHub, WorkflowServer
 
 
 class HealthHandler(BaseHTTPRequestHandler):
@@ -159,6 +160,17 @@ async def async_main(config: AppConfig) -> None:
     personality_agent = personality_manager.build()
     logger.info("✓ Agents initialized")
 
+    workflow_hub: WorkflowEventHub | None = None
+    workflow_server: WorkflowServer | None = None
+    if config.workflow_debug_server_enabled:
+        workflow_hub = WorkflowEventHub()
+        workflow_server = WorkflowServer(
+            event_hub=workflow_hub,
+            host=config.workflow_debug_host,
+            port=config.workflow_debug_port,
+        )
+        await workflow_server.start()
+
     with resolve_config_file("telegram.yaml").open("r", encoding="utf-8") as handle:
         telegram_config = yaml.safe_load(handle) or {}
     with resolve_config_file("rate_limits.yaml").open("r", encoding="utf-8") as handle:
@@ -192,6 +204,7 @@ async def async_main(config: AppConfig) -> None:
         ),
         group_reply_on_mention_only=features.get("group_reply_on_mention_only", True),
         group_summary_every_messages=features.get("group_summary_every_messages", 25),
+        workflow_event_hub=workflow_hub,
     )
 
     # Start task scheduler
@@ -225,6 +238,8 @@ async def async_main(config: AppConfig) -> None:
     finally:
         await scheduler.stop()
         await bot.stop()
+        if workflow_server is not None:
+            await workflow_server.stop()
         if mcp_manager is not None:
             await mcp_manager.stop_all_servers()
 

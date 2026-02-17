@@ -68,11 +68,23 @@ Charts use Plotly for responsive, interactive visuals (zoom, pan, hover, legend 
 - **Health Checks**: Real-time service health monitoring
 - **Runtime Snapshot**: Raw startup capability payload from `her:runtime:capabilities`
 
+### 🧠 Workflow Debugger (Realtime DAG)
+- **WebSocket Event Stream**: `ws://localhost:8081/ws/workflow`
+- **Execution Graph**: Input → Intent Classifier → Memory Lookup → Tool Selector → Tool Executor/LLM → Response
+- **Timeline + Latency**: Node durations and total request latency
+- **Live Console**: Streaming tool stdout/stderr and stage transitions
+- **Debug Toggle**: `http://localhost:8081/workflow?debug=true` reveals raw LLM prompts + tool I/O
+
 ## Access
 
 The dashboard runs on port `8501` and is accessible at:
 ```
 http://localhost:8501
+```
+
+Realtime workflow debugger:
+```
+http://localhost:8081/workflow
 ```
 
 ## Configuration

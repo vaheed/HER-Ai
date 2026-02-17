@@ -40,6 +40,9 @@ Configuration is driven by environment variables in `.env` and YAML files under 
 | `ENVIRONMENT` | `development` | Environment label |
 | `TZ` | `UTC` | Global timezone |
 | `STARTUP_WARMUP_ENABLED` | `false` | Optional startup warmup compatibility check |
+| `WORKFLOW_DEBUG_SERVER_ENABLED` | `true` | Enable realtime workflow DAG server |
+| `WORKFLOW_DEBUG_HOST` | `0.0.0.0` | Workflow debug server bind host |
+| `WORKFLOW_DEBUG_PORT` | `8081` | Workflow debug server port |
 | `TELEGRAM_ENABLED` | `true` | Enable/disable Telegram polling |
 | `TELEGRAM_BOT_TOKEN` | - | Telegram bot token |
 | `TELEGRAM_STARTUP_RETRY_DELAY_SECONDS` | `10` | Retry delay for transient Telegram network errors |

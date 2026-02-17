@@ -9,6 +9,7 @@ services:
     - .env
     ports:
     - 8000:8000
+    - 8081:8081
     depends_on:
       postgres:
         condition: service_healthy
@@ -46,6 +47,9 @@ services:
     - SANDBOX_CONTAINER_NAME
     - HER_CONFIG_DIR
     - DOCKER_GID
+    - WORKFLOW_DEBUG_SERVER_ENABLED
+    - WORKFLOW_DEBUG_HOST
+    - WORKFLOW_DEBUG_PORT
     - TZ
     volumes:
     - her_config:/app/config

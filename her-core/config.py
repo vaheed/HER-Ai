@@ -62,6 +62,9 @@ class AppConfig:
     sandbox_cpu_time_limit_seconds: int = int(os.getenv("HER_SANDBOX_CPU_TIME_LIMIT_SECONDS", "20"))
     sandbox_memory_limit_mb: int = int(os.getenv("HER_SANDBOX_MEMORY_LIMIT_MB", "512"))
     startup_warmup_enabled: bool = _env_bool("STARTUP_WARMUP_ENABLED", False)
+    workflow_debug_server_enabled: bool = _env_bool("WORKFLOW_DEBUG_SERVER_ENABLED", True)
+    workflow_debug_host: str = os.getenv("WORKFLOW_DEBUG_HOST", "0.0.0.0")
+    workflow_debug_port: int = int(os.getenv("WORKFLOW_DEBUG_PORT", "8081"))
 
     log_level: str = os.getenv("LOG_LEVEL", "INFO")
     environment: str = os.getenv("ENVIRONMENT", "development")

@@ -1,0 +1,387 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>HER Workflow Debugger</title>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
+    <style>
+      :root {
+        --bg: #f5f2eb;
+        --panel: #fffef9;
+        --ink: #12202f;
+        --muted: #6c7a89;
+        --edge: #d5dce5;
+        --idle: #d6d6d6;
+        --running: #2084ff;
+        --success: #1f9d55;
+        --error: #c73838;
+        --accent: #f4a259;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background: radial-gradient(circle at top right, #ffe8c6 0, transparent 40%), var(--bg);
+        color: var(--ink);
+        font-family: "Avenir Next", "Segoe UI", sans-serif;
+      }
+
+      #app {
+        max-width: 1400px;
+        margin: 0 auto;
+        padding: 16px;
+      }
+
+      .grid {
+        display: grid;
+        gap: 12px;
+        grid-template-columns: 2fr 1.1fr;
+      }
+
+      .panel {
+        background: var(--panel);
+        border: 1px solid #ebdfce;
+        border-radius: 12px;
+        padding: 12px;
+      }
+
+      .panel h3 {
+        margin: 0 0 8px;
+        font-size: 14px;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+
+      .row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+      }
+
+      .exec-list {
+        max-height: 170px;
+        overflow: auto;
+      }
+
+      .exec-item {
+        width: 100%;
+        text-align: left;
+        border: 1px solid #e7e0d4;
+        background: #fff;
+        border-radius: 8px;
+        padding: 8px;
+        margin-bottom: 6px;
+        cursor: pointer;
+      }
+
+      .exec-item.active {
+        border-color: var(--accent);
+        box-shadow: 0 0 0 2px rgba(244, 162, 89, 0.2);
+      }
+
+      .timeline,
+      .log-console {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 12px;
+        max-height: 300px;
+        overflow: auto;
+        background: #fcfbf7;
+        padding: 8px;
+        border-radius: 8px;
+      }
+
+      .legend span {
+        margin-right: 10px;
+        font-size: 12px;
+      }
+
+      .dot {
+        width: 10px;
+        height: 10px;
+        display: inline-block;
+        border-radius: 50%;
+        margin-right: 4px;
+      }
+
+      .muted {
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      @media (max-width: 980px) {
+        .grid {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app">
+      <div class="panel row">
+        <div>
+          <strong>HER Real-Time Workflow</strong>
+          <div class="muted">Toggle raw prompt/tool internals with <code>?debug=true</code></div>
+        </div>
+        <div class="legend">
+          <span><i class="dot" style="background: var(--idle)"></i>idle</span>
+          <span><i class="dot" style="background: var(--running)"></i>running</span>
+          <span><i class="dot" style="background: var(--success)"></i>success</span>
+          <span><i class="dot" style="background: var(--error)"></i>error</span>
+        </div>
+      </div>
+
+      <div class="grid" style="margin-top: 12px">
+        <div class="panel">
+          <h3>Workflow Graph</h3>
+          <svg id="graph" width="100%" height="280"></svg>
+          <div class="row" style="margin-top: 8px">
+            <div class="muted">Execution: {{ selected?.execution_id || 'none' }}</div>
+            <div class="muted">Total latency: {{ formatMs(selected?.total_latency_ms || 0) }}</div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <h3>Executions</h3>
+          <div class="exec-list">
+            <button
+              v-for="exec in executions"
+              :key="exec.execution_id"
+              class="exec-item"
+              :class="{ active: exec.execution_id === selectedId }"
+              @click="selectedId = exec.execution_id"
+            >
+              <div><strong>{{ exec.message || '(no message)' }}</strong></div>
+              <div class="muted">{{ exec.execution_id.slice(0, 10) }} · {{ exec.started_at }}</div>
+            </button>
+          </div>
+        </div>
+
+        <div class="panel">
+          <h3>Execution Timeline</h3>
+          <div class="timeline">
+            <div v-for="entry in timeline" :key="entry.key">
+              [{{ entry.time }}] {{ entry.stage }} → {{ entry.status }}
+              <span class="muted">({{ formatMs(entry.duration) }})</span>
+            </div>
+            <div v-if="!timeline.length" class="muted">No timeline yet.</div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <h3>Realtime Log Console</h3>
+          <div class="log-console">
+            <div v-for="event in recentEvents" :key="event.key">
+              [{{ event.timestamp }}] {{ event.event_type }} · {{ event.node_id }} · {{ event.status }}
+            </div>
+            <div v-if="!recentEvents.length" class="muted">No events yet.</div>
+          </div>
+        </div>
+
+        <div class="panel" style="grid-column: 1 / -1">
+          <h3>Tool Output</h3>
+          <details open>
+            <summary>stdout/stderr</summary>
+            <pre class="log-console" style="max-height: 200px">{{ toolOutput }}</pre>
+          </details>
+        </div>
+
+        <div v-if="debugMode" class="panel" style="grid-column: 1 / -1">
+          <h3>Debug Details</h3>
+          <div class="muted">Raw prompts and tool input/output are visible because <code>debug=true</code>.</div>
+          <pre class="log-console" style="max-height: 320px">{{ JSON.stringify(debugPayload, null, 2) }}</pre>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const { createApp } = Vue
+
+      createApp({
+        data() {
+          return {
+            nodes: [],
+            edges: [],
+            executions: [],
+            selectedId: null,
+            debugMode: new URLSearchParams(window.location.search).get('debug') === 'true',
+          }
+        },
+        computed: {
+          selected() {
+            return this.executions.find((exec) => exec.execution_id === this.selectedId) || null
+          },
+          recentEvents() {
+            const selected = this.selected
+            if (!selected) return []
+            return (selected.events || []).slice(-120).map((event, idx) => ({ ...event, key: `${event.timestamp}-${idx}` }))
+          },
+          timeline() {
+            const selected = this.selected
+            if (!selected) return []
+            return Object.values(selected.nodes || {}).map((node) => ({
+              key: node.node_id,
+              stage: node.node_id,
+              status: node.status,
+              duration: node.duration_ms,
+              time: node.started_at || '-',
+            }))
+          },
+          toolOutput() {
+            const selected = this.selected
+            if (!selected) return ''
+            const node = (selected.nodes || {}).tool_executor
+            return node && node.stdout ? node.stdout.join('\n') : '(empty)'
+          },
+          debugPayload() {
+            const selected = this.selected
+            if (!selected) return {}
+            const debugEvents = (selected.events || []).filter((e) => {
+              const details = e.details || {}
+              return details.raw_messages || details.command || details.error || details.tool_output || details.tool_error
+            })
+            return {
+              execution_id: selected.execution_id,
+              event_count: debugEvents.length,
+              events: debugEvents,
+            }
+          },
+        },
+        methods: {
+          formatMs(value) {
+            return `${Number(value || 0).toFixed(1)}ms`
+          },
+          connectWs() {
+            const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws'
+            const ws = new WebSocket(`${protocol}://${window.location.host}/ws/workflow`)
+
+            ws.onmessage = (event) => {
+              const payload = JSON.parse(event.data)
+              if (payload.type === 'snapshot') {
+                this.applySnapshot(payload.payload)
+                return
+              }
+              if (payload.type === 'event') {
+                this.applyEvent(payload.event)
+              }
+            }
+
+            ws.onclose = () => setTimeout(this.connectWs, 1500)
+          },
+          applySnapshot(snapshot) {
+            this.nodes = snapshot.nodes || []
+            this.edges = snapshot.edges || []
+            this.executions = snapshot.executions || []
+            if (!this.selectedId && this.executions.length) {
+              this.selectedId = this.executions[0].execution_id
+            }
+            this.renderGraph()
+          },
+          applyEvent(event) {
+            const executionId = event.execution_id
+            let exec = this.executions.find((item) => item.execution_id === executionId)
+            if (!exec) {
+              exec = {
+                execution_id: executionId,
+                message: '',
+                started_at: event.timestamp,
+                total_latency_ms: 0,
+                events: [],
+                nodes: Object.fromEntries((this.nodes || []).map((n) => [n.id, { node_id: n.id, status: 'idle', duration_ms: 0, stdout: [] }])),
+              }
+              this.executions.unshift(exec)
+            }
+
+            exec.events = exec.events || []
+            exec.events.push(event)
+            if (exec.events.length > 800) exec.events = exec.events.slice(-800)
+
+            exec.nodes = exec.nodes || {}
+            if (!exec.nodes[event.node_id]) {
+              exec.nodes[event.node_id] = { node_id: event.node_id, status: 'idle', duration_ms: 0, stdout: [] }
+            }
+            exec.nodes[event.node_id].status = event.status
+            if (event.event_type === 'tool_stdout') {
+              exec.nodes[event.node_id].stdout = exec.nodes[event.node_id].stdout || []
+              if (event.details && event.details.line) exec.nodes[event.node_id].stdout.push(event.details.line)
+            }
+            if (event.details && typeof event.details.duration_ms === 'number') {
+              exec.nodes[event.node_id].duration_ms = event.details.duration_ms
+            }
+            if (event.event_type === 'response_sent' && event.details && typeof event.details.total_latency_ms === 'number') {
+              exec.total_latency_ms = event.details.total_latency_ms
+            }
+
+            if (!this.selectedId) this.selectedId = executionId
+            this.executions.sort((a, b) => new Date(b.started_at) - new Date(a.started_at))
+            this.renderGraph()
+          },
+          renderGraph() {
+            if (!this.nodes.length) return
+            const svg = d3.select('#graph')
+            svg.selectAll('*').remove()
+
+            const width = svg.node().clientWidth || 900
+            const height = 280
+            const xStep = width / (this.nodes.length + 1)
+            const y = height / 2
+            const positions = Object.fromEntries(this.nodes.map((node, idx) => [node.id, { x: xStep * (idx + 1), y }]))
+            const selected = this.selected
+
+            svg
+              .append('g')
+              .selectAll('line')
+              .data(this.edges)
+              .join('line')
+              .attr('x1', (d) => positions[d.source]?.x || 0)
+              .attr('y1', (d) => positions[d.source]?.y || 0)
+              .attr('x2', (d) => positions[d.target]?.x || 0)
+              .attr('y2', (d) => positions[d.target]?.y || 0)
+              .attr('stroke', 'var(--edge)')
+              .attr('stroke-width', 2)
+
+            const getColor = (nodeId) => {
+              const status = selected?.nodes?.[nodeId]?.status || 'idle'
+              if (status === 'running') return 'var(--running)'
+              if (status === 'success') return 'var(--success)'
+              if (status === 'error') return 'var(--error)'
+              return 'var(--idle)'
+            }
+
+            svg
+              .append('g')
+              .selectAll('circle')
+              .data(this.nodes)
+              .join('circle')
+              .attr('cx', (d) => positions[d.id].x)
+              .attr('cy', (d) => positions[d.id].y)
+              .attr('r', 20)
+              .attr('fill', (d) => getColor(d.id))
+              .attr('stroke', '#ffffff')
+              .attr('stroke-width', 2)
+
+            svg
+              .append('g')
+              .selectAll('text')
+              .data(this.nodes)
+              .join('text')
+              .attr('x', (d) => positions[d.id].x)
+              .attr('y', (d) => positions[d.id].y + 40)
+              .attr('text-anchor', 'middle')
+              .attr('font-size', 11)
+              .text((d) => d.label)
+          },
+        },
+        mounted() {
+          this.connectWs()
+          window.addEventListener('resize', this.renderGraph)
+        },
+      }).mount('#app')
+    </script>
+  </body>
+</html>

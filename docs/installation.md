@@ -38,6 +38,7 @@ docker compose up -d --build
 ```bash
 docker compose ps
 curl -sS http://localhost:8000
+curl -sS http://localhost:8081/workflow/health
 ```
 
 ## Platform-Specific Notes
@@ -59,6 +60,7 @@ curl -sS http://localhost:8000
 - Recommended: Docker Desktop + WSL2 backend.
 - Run commands in WSL terminal for path consistency.
 - Ensure port mappings `8000`, `8501`, `11434` are available.
+- Ensure port mapping `8081` is available if workflow debugger is enabled.
 
 ## Optional Local (No Docker) Setup
 

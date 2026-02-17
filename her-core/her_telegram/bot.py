@@ -24,6 +24,7 @@ class HERBot:
         welcome_message: str = "Hi! I'm HER, your AI companion. How can I help you today?",
         group_reply_on_mention_only: bool = True,
         group_summary_every_messages: int = 25,
+        workflow_event_hub=None,
     ):
         self.token = token
         self.handlers = MessageHandlers(
@@ -38,6 +39,7 @@ class HERBot:
             welcome_message=welcome_message,
             group_reply_on_mention_only=group_reply_on_mention_only,
             group_summary_every_messages=group_summary_every_messages,
+            workflow_event_hub=workflow_event_hub,
         )
         self.reflection_agent = reflection_agent
         self.app = None

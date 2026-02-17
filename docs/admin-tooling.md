@@ -47,6 +47,11 @@ Persistence behavior:
 - primary: `config/scheduler.yaml`
 - fallback (if config path read-only): Redis key `her:scheduler:tasks_override`
 
+Reminder delivery safeguards:
+- `notify_user_id` must be a positive numeric Telegram chat/user id.
+- Invalid/missing ids fail fast and are not treated as successful sends.
+- Permanent Telegram delivery errors (for example `Chat not found` or bot forbidden) disable the reminder task to prevent retry loops.
+
 ## MCP and Sandbox Tooling
 
 - MCP startup/status: `her-core/her_mcp/manager.py`

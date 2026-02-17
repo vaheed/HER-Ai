@@ -208,6 +208,20 @@ def test_scheduler_supports_runtime_updates_and_persistence() -> None:
     assert "set failed: undefined name in expr" in source
 
 
+def test_scheduler_rejects_invalid_notify_user_ids_and_handles_permanent_telegram_failures() -> None:
+    source = Path("her-core/utils/scheduler.py").read_text()
+    assert "if value > 0:" in source
+    assert "Reminder permanent failure" in source
+    assert "chat_not_found" in source
+    assert "forbidden" in source
+
+
+def test_handler_normalizes_invalid_notify_user_id_to_requesting_user() -> None:
+    source = Path("her-core/her_telegram/handlers.py").read_text()
+    assert "parsed_notify_user_id" in source
+    assert "parsed_notify_user_id > 0" in source
+
+
 def test_mcp_profile_path_is_configurable_via_env() -> None:
     main_source = Path("her-core/main.py").read_text()
     env_example = Path(".env.example").read_text()
@@ -310,16 +324,30 @@ def test_sandbox_executor_uses_external_timeout_wrapper_not_docker_timeout_kwarg
     assert "self.container.exec_run(\n                wrapped,\n                user=user,\n                workdir=workdir,\n                timeout=" not in sandbox_source
 
 
-def test_handlers_route_messages_via_autonomous_sandbox_operator() -> None:
+def test_handlers_use_strict_intent_gating_before_tool_execution() -> None:
     handlers_source = Path("her-core/her_telegram/handlers.py").read_text()
     operator_source = Path("her-core/her_telegram/autonomous_operator.py").read_text()
     assert "AutonomousSandboxOperator" in handlers_source
-    assert "self._autonomous_operator.execute_with_history(" in handlers_source
+    assert "CHAT_MODE = \"CHAT_MODE\"" in handlers_source
+    assert "ACTION_MODE = \"ACTION_MODE\"" in handlers_source
+    assert "ACTION_INTENT_THRESHOLD" in handlers_source
+    assert "def _classify_intent(" in handlers_source
+    assert "def _extract_immediate_shell_command(" in handlers_source
+    assert "self._stream_sandbox_command(" in handlers_source
+    assert "self._autonomous_operator.execute_with_history(" not in handlers_source
     assert "Invalid format. Return JSON action only." in operator_source
     assert '"background": false' in operator_source
     assert '"write_to": "/absolute/path/file.ext"' in operator_source
     assert '"done": true' in operator_source
     assert "Full conversation history (oldest to newest):" in operator_source
+
+
+def test_sandbox_executor_supports_async_streaming_path() -> None:
+    sandbox_source = Path("her-core/her_mcp/sandbox_tools.py").read_text()
+    assert "async def execute_command_stream(" in sandbox_source
+    assert "asyncio.create_subprocess_exec(" in sandbox_source
+    assert "on_stdout_line" in sandbox_source
+    assert "on_stderr_line" in sandbox_source
 
 
 def test_handlers_enforce_language_alignment_and_multi_intent_schedule_flow() -> None:

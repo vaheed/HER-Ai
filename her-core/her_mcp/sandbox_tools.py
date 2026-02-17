@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import shlex
+import asyncio
 import time
 import base64
 from datetime import datetime, timezone
@@ -124,6 +125,111 @@ class SandboxExecutor:
             result_dict = {
                 "success": False,
                 "output": "",
+                "error": str(exc),
+                "exit_code": -1,
+                "execution_time": execution_time,
+            }
+            self._log_execution(command, result_dict, user, workdir)
+            return result_dict
+
+    async def execute_command_stream(
+        self,
+        command: str,
+        timeout: int = 30,
+        workdir: str = "/workspace",
+        user: str = "sandbox",
+        cpu_time_limit_seconds: int = 20,
+        memory_limit_mb: int = 512,
+        on_stdout_line: Any | None = None,
+        on_stderr_line: Any | None = None,
+    ) -> dict[str, Any]:
+        """Execute command in sandbox and stream stdout/stderr line-by-line."""
+        start_time = time.time()
+        stdout_lines: list[str] = []
+        stderr_lines: list[str] = []
+        exit_code = -1
+        timed_out = False
+
+        wrapped = self._build_limited_command(
+            command=command,
+            timeout=max(1, int(timeout)),
+            cpu_time_limit_seconds=max(1, int(cpu_time_limit_seconds)),
+            memory_limit_mb=max(64, int(memory_limit_mb)),
+        )
+        proc_args = [
+            "docker",
+            "exec",
+            "-i",
+            "-u",
+            user,
+            "-w",
+            workdir,
+            self.container_name,
+            "bash",
+            "-lc",
+            wrapped,
+        ]
+
+        async def _emit(callback: Any | None, line: str) -> None:
+            if callback is None:
+                return
+            if asyncio.iscoroutinefunction(callback):
+                await callback(line)
+                return
+            callback(line)
+
+        async def _consume_stream(stream: Any, sink: list[str], callback: Any | None) -> None:
+            while True:
+                raw = await stream.readline()
+                if not raw:
+                    break
+                line = raw.decode("utf-8", errors="replace").rstrip("\n")
+                sink.append(line)
+                await _emit(callback, line)
+
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *proc_args,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+
+            stdout_task = asyncio.create_task(_consume_stream(process.stdout, stdout_lines, on_stdout_line))
+            stderr_task = asyncio.create_task(_consume_stream(process.stderr, stderr_lines, on_stderr_line))
+
+            try:
+                await asyncio.wait_for(process.wait(), timeout=max(1, int(timeout)) + 10)
+            except TimeoutError:
+                timed_out = True
+                process.kill()
+                await process.wait()
+            finally:
+                await stdout_task
+                await stderr_task
+
+            exit_code = int(process.returncode if process.returncode is not None else -1)
+            if timed_out and exit_code == -1:
+                exit_code = 124
+
+            execution_time = time.time() - start_time
+            stderr_joined = "\n".join(stderr_lines).strip()
+            if exit_code == 124 and not stderr_joined:
+                stderr_joined = f"Command timed out after {max(1, int(timeout))}s"
+
+            result_dict = {
+                "success": exit_code == 0,
+                "output": "\n".join(stdout_lines).strip(),
+                "error": stderr_joined,
+                "exit_code": exit_code,
+                "execution_time": execution_time,
+            }
+            self._log_execution(command, result_dict, user, workdir)
+            return result_dict
+        except Exception as exc:  # noqa: BLE001
+            execution_time = time.time() - start_time
+            result_dict = {
+                "success": False,
+                "output": "\n".join(stdout_lines).strip(),
                 "error": str(exc),
                 "exit_code": -1,
                 "execution_time": execution_time,

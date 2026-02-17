@@ -35,10 +35,11 @@ HER-Ai is organized into five layers:
 ```text
 Telegram message
   -> her_telegram.handlers.MessageHandlers
+  -> strict intent classifier (CHAT_MODE default, ACTION_MODE on explicit high-confidence action intent)
   -> context update (Redis)
   -> memory lookup (Mem0/pgvector)
   -> LLM response generation (with optional failover)
-  -> optional tool/sandbox actions
+  -> validated tool/sandbox action execution (immediate by default; scheduler only on explicit scheduling intent)
   -> metrics + decision logs persisted
 ```
 

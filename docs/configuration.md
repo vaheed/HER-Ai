@@ -48,6 +48,7 @@ Configuration is driven by environment variables in `.env` and YAML files under 
 | `TELEGRAM_PUBLIC_RATE_LIMIT_PER_MINUTE` | `20` | Public user rate limit |
 | `HER_AUTONOMOUS_MAX_STEPS` | `16` | Max autonomous action steps per request |
 | `HER_SANDBOX_COMMAND_TIMEOUT_SECONDS` | `60` | Sandbox command timeout |
+| `HER_ACTION_INTENT_THRESHOLD` | `0.8` | Minimum confidence required to switch from chat mode to action mode |
 | `HER_SANDBOX_CPU_TIME_LIMIT_SECONDS` | `20` | Sandbox CPU time cap |
 | `HER_SANDBOX_MEMORY_LIMIT_MB` | `512` | Sandbox memory cap |
 | `MCP_CONFIG_PATH` | `mcp_servers.yaml` | MCP profile file name |

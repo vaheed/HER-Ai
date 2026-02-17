@@ -504,6 +504,10 @@ class TaskScheduler:
                     success = True
                 elif task_type == "reminder":
                     result = await self._execute_reminder_task(task)
+                    if result.startswith("Reminder permanent failure"):
+                        error = result
+                        success = False
+                        break
                     success = result.startswith("Reminder sent")
                     if not success:
                         error = result
@@ -609,12 +613,16 @@ class TaskScheduler:
     async def _execute_reminder_task(self, task: dict[str, Any]) -> str:
         user_id = self._resolve_notify_user_id(task)
         if user_id is None:
-            return "Reminder failed: notify_user_id missing"
+            return "Reminder permanent failure: notify_user_id missing or invalid"
 
         message = str(task.get("message", "Reminder"))
-        sent = await self._send_telegram_notification(user_id, message)
+        sent, failure_reason = await self._send_telegram_notification(user_id, message)
         if sent:
             return f"Reminder sent to {user_id}"
+        if failure_reason in {"chat_not_found", "forbidden"}:
+            task["enabled"] = False
+            task.pop("_next_run", None)
+            return f"Reminder permanent failure for {user_id}: {failure_reason}"
         return f"Reminder failed for {user_id}"
 
     async def _execute_self_optimization_task(self, task: dict[str, Any]) -> str:
@@ -689,21 +697,28 @@ class TaskScheduler:
             f"avg_score={avg_score}, weak_areas={weak_areas[:3]}, strong_areas={strong_areas[:3]}"
         )
 
-    async def _send_telegram_notification(self, chat_id: int, text: str) -> bool:
+    async def _send_telegram_notification(self, chat_id: int, text: str) -> tuple[bool, str | None]:
         """Send scheduler notifications via Telegram Bot API."""
         token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
         if not token:
             logger.warning("Cannot send scheduler notification: TELEGRAM_BOT_TOKEN missing")
-            return False
+            return False, "missing_token"
         try:
             from telegram import Bot
 
             bot = Bot(token=token)
             await bot.send_message(chat_id=chat_id, text=text)
-            return True
+            return True, None
         except Exception as exc:  # noqa: BLE001
+            message = str(exc).lower()
+            if "chat not found" in message:
+                logger.warning("Failed to send scheduler Telegram notification: Chat not found for chat_id=%s", chat_id)
+                return False, "chat_not_found"
+            if "forbidden" in message or "bot was blocked" in message:
+                logger.warning("Failed to send scheduler Telegram notification: bot forbidden for chat_id=%s", chat_id)
+                return False, "forbidden"
             logger.warning("Failed to send scheduler Telegram notification: %s", exc)
-            return False
+            return False, "transient_error"
 
     @staticmethod
     def _resolve_notify_user_id(task: dict[str, Any]) -> int | None:
@@ -712,7 +727,9 @@ class TaskScheduler:
             candidate = os.getenv("ADMIN_USER_ID", "")
         text = str(candidate).strip()
         if text.isdigit():
-            return int(text)
+            value = int(text)
+            if value > 0:
+                return value
         return None
 
     @staticmethod
@@ -835,7 +852,7 @@ class TaskScheduler:
             if user_id is None:
                 return "notify failed: notify_user_id missing"
             message = self._format_template(str(step.get("message", "Task triggered")), context)
-            sent = await self._send_telegram_notification(user_id, message)
+            sent, _ = await self._send_telegram_notification(user_id, message)
             return "notify sent" if sent else "notify failed"
 
         if action == "webhook":

@@ -1,6 +1,9 @@
+import asyncio
 import logging
 import os
 import re
+import time
+import threading
 from datetime import UTC, datetime, timedelta
 import json
 from typing import Any
@@ -33,6 +36,9 @@ from utils.schedule_helpers import (
 from utils.scheduler import TaskScheduler
 
 logger = logging.getLogger(__name__)
+CHAT_MODE = "CHAT_MODE"
+ACTION_MODE = "ACTION_MODE"
+ACTION_INTENT_THRESHOLD = float(os.getenv("HER_ACTION_INTENT_THRESHOLD", "0.8"))
 _INTERNET_DENIAL_PATTERN = re.compile(r"\b(no|not|cannot|can't)\b.*\binternet\b", re.IGNORECASE)
 _RETRY_IN_MIN_SEC_PATTERN = re.compile(r"try again in\s+(\d+)m([\d.]+)s", re.IGNORECASE)
 _RETRY_AFTER_SECONDS_PATTERN = re.compile(r"retry after\s+(\d+)s", re.IGNORECASE)
@@ -45,6 +51,18 @@ _IN_INTERVAL_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _HOST_PATTERN = re.compile(r"\b(?:https?://)?([a-z0-9][a-z0-9.-]+\.[a-z]{2,})\b", re.IGNORECASE)
+_ACTION_WORD_PATTERN = re.compile(
+    r"\b(run|execute|test|check|scan|trace|traceroute|ping|dig|mtr|nmap|curl|wget)\b",
+    re.IGNORECASE,
+)
+_SCHEDULE_WORD_PATTERN = re.compile(
+    r"\b(schedule|later|async|background|remind|notify|every|daily|weekly|tomorrow|next)\b",
+    re.IGNORECASE,
+)
+_GREETING_PATTERN = re.compile(
+    r"^\s*(hello|hi|hey|yo|good morning|good afternoon|good evening|sup|what's up)\b",
+    re.IGNORECASE,
+)
 _WEEKDAY_TO_INDEX = {
     "monday": 0,
     "tuesday": 1,
@@ -1136,10 +1154,14 @@ class MessageHandlers:
         }
 
         notify_user_id = task.get("notify_user_id")
+        parsed_notify_user_id: int | None = None
         if isinstance(notify_user_id, int):
-            normalized["notify_user_id"] = notify_user_id
+            parsed_notify_user_id = notify_user_id
         elif str(notify_user_id or "").strip().isdigit():
-            normalized["notify_user_id"] = int(str(notify_user_id).strip())
+            parsed_notify_user_id = int(str(notify_user_id).strip())
+
+        if parsed_notify_user_id is not None and parsed_notify_user_id > 0:
+            normalized["notify_user_id"] = parsed_notify_user_id
         else:
             normalized["notify_user_id"] = user_id
 
@@ -1500,6 +1522,7 @@ class MessageHandlers:
         allowed_prefixes = (
             "dig ",
             "ping ",
+            "mtr ",
             "traceroute ",
             "nmap ",
             "openssl ",
@@ -1856,6 +1879,182 @@ class MessageHandlers:
                     )
             raise primary_exc
 
+    def _log_stage_timing(self, user_id: int, stage: str, started_at: float, extra: dict[str, Any] | None = None) -> None:
+        duration_ms = round((time.perf_counter() - started_at) * 1000.0, 2)
+        payload: dict[str, Any] = {"stage": stage, "duration_ms": duration_ms}
+        if extra:
+            payload.update(extra)
+        self._decision_logger.log(
+            event_type="performance_timing",
+            summary=f"{stage} {duration_ms}ms",
+            user_id=str(user_id),
+            source="telegram",
+            details=payload,
+        )
+
+    @staticmethod
+    def _classify_intent(message: str) -> dict[str, Any]:
+        text = message.strip()
+        lower = text.lower()
+        is_greeting = bool(_GREETING_PATTERN.match(text))
+        has_action_word = bool(_ACTION_WORD_PATTERN.search(text))
+        has_schedule_word = bool(_SCHEDULE_WORD_PATTERN.search(text))
+        has_command_shape = lower.startswith(("run ", "execute ", "test ", "check ", "scan ", "trace "))
+        has_tool_word = any(token in lower for token in ("mtr", "traceroute", "dig", "ping", "nmap", "curl", "wget"))
+        action_confidence = 0.95 if (has_action_word and (has_command_shape or has_tool_word)) else 0.1
+        if is_greeting and not has_tool_word:
+            action_confidence = 0.0
+        mode = ACTION_MODE if action_confidence >= ACTION_INTENT_THRESHOLD else CHAT_MODE
+        return {
+            "mode": mode,
+            "is_greeting": is_greeting,
+            "action_confidence": action_confidence,
+            "has_schedule_word": has_schedule_word,
+        }
+
+    @staticmethod
+    def _extract_immediate_shell_command(message: str) -> str | None:
+        lower = message.strip().lower()
+        host_match = _HOST_PATTERN.search(lower)
+        host = host_match.group(1) if host_match else ""
+        if "mtr" in lower and host:
+            return f"mtr --report --report-cycles 10 {host}"
+        if "traceroute" in lower and host:
+            return f"traceroute -m 15 {host}"
+        if "dns" in lower and host:
+            return f"dig +short {host}"
+        if "ping" in lower and host:
+            return f"ping -c 4 {host}"
+        run_match = re.match(r"^\s*(?:please\s+)?(?:run|execute)\s+(.+)$", message.strip(), re.IGNORECASE)
+        if run_match:
+            raw = run_match.group(1).strip()
+            return raw if raw else None
+        for prefix in ("mtr ", "dig ", "ping ", "traceroute ", "nmap ", "curl ", "wget "):
+            if lower.startswith(prefix):
+                return message.strip()
+        return None
+
+    @staticmethod
+    def _explicitly_requests_scheduling(message: str) -> bool:
+        return bool(_SCHEDULE_WORD_PATTERN.search(message))
+
+    async def _stream_sandbox_command(
+        self,
+        update: Update,
+        user_id: int,
+        command: str,
+    ) -> tuple[str, bool]:
+        progress = await update.effective_message.reply_text(f"▶️ Executing now in sandbox:\n{command}")
+        buffer_lines: list[str] = []
+        lock = asyncio.Lock()
+        last_edit = 0.0
+
+        async def _render_partial(force: bool = False) -> None:
+            nonlocal last_edit
+            now = time.monotonic()
+            if not force and now - last_edit < 0.8:
+                return
+            if not buffer_lines:
+                return
+            text = "\n".join(buffer_lines[-20:])[-3200:]
+            try:
+                async with lock:
+                    await progress.edit_text(f"▶️ Running...\n\n{text}")
+                last_edit = now
+            except Exception:  # noqa: BLE001
+                pass
+
+        async def _on_stdout(line: str) -> None:
+            if line.strip():
+                buffer_lines.append(line)
+                await _render_partial()
+
+        async def _on_stderr(line: str) -> None:
+            if line.strip():
+                buffer_lines.append(f"[stderr] {line}")
+                await _render_partial()
+
+        tool_start = time.perf_counter()
+        container_name = os.getenv("SANDBOX_CONTAINER_NAME", "her-sandbox")
+        result = await SandboxExecutor(container_name=container_name).execute_command_stream(
+            command=command,
+            timeout=int(os.getenv("HER_SANDBOX_COMMAND_TIMEOUT_SECONDS", "30")),
+            on_stdout_line=_on_stdout,
+            on_stderr_line=_on_stderr,
+        )
+        self._log_stage_timing(user_id, "tool_execution", tool_start, {"command": command, "exit_code": result.get("exit_code")})
+        await _render_partial(force=True)
+
+        lines = ["✅ Command executed." if result["success"] else f"❌ Command failed (exit={result['exit_code']})."]
+        if result.get("output"):
+            lines.append(f"Output:\n{result['output']}")
+        if result.get("error"):
+            lines.append(f"Errors:\n{result['error']}")
+        lines.append(f"Time: {result.get('execution_time', 0):.2f}s")
+        final = "\n\n".join(lines)[:3900]
+        try:
+            await progress.edit_text(final)
+        except Exception:  # noqa: BLE001
+            await self._reply(update, final)
+        return final, bool(result["success"])
+
+    async def _stream_chat_response(
+        self,
+        update: Update,
+        user_id: int,
+        messages: list[Any],
+    ) -> str:
+        progress = await update.effective_message.reply_text("…")
+        queue: asyncio.Queue[str | None] = asyncio.Queue()
+        loop = asyncio.get_running_loop()
+        llm_error: list[BaseException] = []
+        used_fallback = False
+
+        def _produce() -> None:
+            try:
+                for chunk in self._llm.stream(messages):
+                    token = getattr(chunk, "content", "")
+                    if isinstance(token, list):
+                        token = "".join(str(x) for x in token)
+                    token_text = str(token)
+                    if token_text:
+                        asyncio.run_coroutine_threadsafe(queue.put(token_text), loop)
+            except Exception as exc:  # noqa: BLE001
+                llm_error.append(exc)
+            finally:
+                asyncio.run_coroutine_threadsafe(queue.put(None), loop)
+
+        llm_start = time.perf_counter()
+        worker = threading.Thread(target=_produce, daemon=True)
+        worker.start()
+
+        assembled = ""
+        last_edit = 0.0
+        while True:
+            token = await queue.get()
+            if token is None:
+                break
+            assembled += token
+            now = time.monotonic()
+            if now - last_edit >= 0.6 and assembled.strip():
+                try:
+                    await progress.edit_text(assembled[:3900])
+                    last_edit = now
+                except Exception:  # noqa: BLE001
+                    pass
+
+        if llm_error or not assembled.strip():
+            reply, used_fallback = self._generate_response_with_failover(messages, user_id)
+            assembled = reply
+
+        self._log_stage_timing(user_id, "llm", llm_start, {"used_fallback": used_fallback})
+        final_text = assembled.strip() or "I am here with you."
+        try:
+            await progress.edit_text(final_text[:3900])
+        except Exception:  # noqa: BLE001
+            await self._reply(update, final_text[:3900])
+        return final_text
+
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not update.message or not update.effective_user:
             return
@@ -1865,8 +2064,11 @@ class MessageHandlers:
         message = (update.message.text or "").strip()
         if not message:
             return
+
+        memory_start = time.perf_counter()
         previous_context = self.memory.get_context(str(user_id))
         previous_assistant_message = self._last_assistant_message(previous_context)
+        self._log_stage_timing(user_id, "memory_lookup", memory_start, {"context_size": len(previous_context)})
 
         is_group = self._is_group_chat(update)
         group_key = self._group_memory_key(chat_id)
@@ -1880,29 +2082,10 @@ class MessageHandlers:
             return
 
         self.memory.update_context(str(user_id), message, "user")
-
         if is_group:
             self.memory.update_context(group_key, f"{update.effective_user.full_name}: {message}", "user", max_messages=120)
 
-        extracted_memories = self._extract_memories_from_message(message)
-        for extracted in extracted_memories:
-            self.memory.add_memory(str(user_id), extracted["text"], extracted["category"], extracted["importance"])
-            if is_group:
-                self.memory.add_memory(group_key, extracted["text"], "group_signal", extracted["importance"])
-        if extracted_memories:
-            try:
-                self.personality_agent.adjust_trait(str(user_id), "emotional_depth", 1)
-            except Exception as exc:  # noqa: BLE001
-                logger.debug("Personality adaptation skipped: %s", exc)
-
-        if is_group:
-            await self._summarize_group_if_needed(chat_id)
-
-        should_reply = True
-        if is_group and self.group_reply_on_mention_only:
-            should_reply = self._message_mentions_bot(update)
-
-        if not should_reply:
+        if is_group and self.group_reply_on_mention_only and not self._message_mentions_bot(update):
             return
 
         try:
@@ -1910,106 +2093,107 @@ class MessageHandlers:
         except (TimedOut, NetworkError) as exc:
             logger.warning("Telegram typing indicator failed for chat %s: %s", chat_id, exc)
 
-        user_context = self.memory.get_context(str(user_id))
-        all_scheduled_tasks, remaining_request = self._parse_multi_intent_schedule_with_llm(
-            message=message,
-            user_id=user_id,
-            language=user_language,
-            context_rows=user_context,
-        )
+        intent = self._classify_intent(message)
+        response = ""
+        task_succeeded = True
+        schedule_count = 0
 
-        response_parts: list[str] = []
-        if all_scheduled_tasks and self.scheduler:
-            existing_names = {str(t.get("name", "")) for t in self.scheduler.get_tasks()}
-            for task in all_scheduled_tasks:
-                task_name = str(task.get("name", "task"))
-                if task_name in existing_names:
-                    task_name = f"{task_name}_{int(datetime.now(UTC).timestamp())}"
-                    task["name"] = task_name
-                existing_names.add(task_name)
-                self.scheduler.add_task(
-                    name=task_name,
-                    interval=str(task.get("interval", "once")),
-                    task_type=str(task.get("type", "reminder")),
-                    enabled=bool(task.get("enabled", True)),
-                    **{k: v for k, v in task.items() if k not in {"name", "interval", "type", "enabled"}},
-                )
-                response_parts.append(
-                    self._build_scheduler_confirmation(
-                        user_id=user_id,
-                        language=user_language,
-                        original_request=message,
-                        task=task,
-                        context_rows=user_context,
-                    )
-                )
-            ok, details = self.scheduler.persist_tasks()
-            if not ok:
-                degraded_notice = self._render_in_user_language(
-                    user_id,
-                    user_language,
-                    f"Scheduler persistence is degraded ({details}), but tasks were created in runtime memory.",
-                )
-                response_parts.append(f"✅ {degraded_notice}")
-
-        operator_input = remaining_request.strip() if remaining_request.strip() else ""
-        should_run_operator = bool(operator_input) or not all_scheduled_tasks
-        try:
-            if should_run_operator:
-                final_action = self._autonomous_operator.execute_with_history(
-                    user_request=operator_input or message,
+        if intent["mode"] == ACTION_MODE:
+            explicit_schedule = self._explicitly_requests_scheduling(message)
+            if explicit_schedule and self.scheduler:
+                scheduler_start = time.perf_counter()
+                all_scheduled_tasks, _ = self._parse_multi_intent_schedule_with_llm(
+                    message=message,
                     user_id=user_id,
-                    conversation_history=user_context,
                     language=user_language,
+                    context_rows=previous_context,
                 )
-                done_result = str(final_action.get("result", "")).strip()
-                if done_result:
-                    response_parts.append(done_result)
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("Autonomous sandbox execution failed for user %s: %s", user_id, exc)
-            response_parts.append(
-                self._render_in_user_language(
-                    user_id,
-                    user_language,
-                    "Autonomous execution failed.",
-                )
-            )
+                response_parts: list[str] = []
+                existing_names = {str(t.get("name", "")) for t in self.scheduler.get_tasks()}
+                for task in all_scheduled_tasks:
+                    task_name = str(task.get("name", "task"))
+                    if task_name in existing_names:
+                        task_name = f"{task_name}_{int(datetime.now(UTC).timestamp())}"
+                        task["name"] = task_name
+                    existing_names.add(task_name)
+                    self.scheduler.add_task(
+                        name=task_name,
+                        interval=str(task.get("interval", "once")),
+                        task_type=str(task.get("type", "reminder")),
+                        enabled=bool(task.get("enabled", True)),
+                        **{k: v for k, v in task.items() if k not in {"name", "interval", "type", "enabled"}},
+                    )
+                    response_parts.append(
+                        self._build_scheduler_confirmation(
+                            user_id=user_id,
+                            language=user_language,
+                            original_request=message,
+                            task=task,
+                            context_rows=previous_context,
+                        )
+                    )
+                ok, details = self.scheduler.persist_tasks()
+                self._log_stage_timing(user_id, "scheduler", scheduler_start, {"created_tasks": len(all_scheduled_tasks), "persisted": ok})
+                if not ok:
+                    response_parts.append(f"Scheduler persistence is degraded: {details}")
+                response = "\n".join(part for part in response_parts if part).strip()
+                schedule_count = len(all_scheduled_tasks)
+                task_succeeded = ok or bool(all_scheduled_tasks)
+            else:
+                command = self._extract_immediate_shell_command(message)
+                if command and self._is_safe_sandbox_command(command):
+                    response, task_succeeded = await self._stream_sandbox_command(update, user_id, command)
+                else:
+                    intent["mode"] = CHAT_MODE
+            if not response.strip():
+                intent["mode"] = CHAT_MODE
 
-        response = "\n".join(part for part in response_parts if part).strip()
-        if not response:
-            response = self._render_in_user_language(
-                user_id,
-                user_language,
-                "✅ Request processed.",
+        if intent["mode"] == CHAT_MODE:
+            mem_search_start = time.perf_counter()
+            related_memories = self.memory.search_memories(str(user_id), message, limit=5)
+            self._log_stage_timing(user_id, "memory_lookup", mem_search_start, {"search_results": len(related_memories)})
+            group_context = self.memory.get_context(group_key) if is_group else []
+            live_context = self._build_live_context(message)
+            prompt = self._build_reply_prompt(
+                user_id=str(user_id),
+                message=message,
+                user_context=self.memory.get_context(str(user_id)),
+                group_context=group_context,
+                memories=related_memories,
+                live_context=live_context,
             )
+            llm_messages = [
+                SystemMessage(content="You are HER. If user message is conversational, respond conversationally."),
+                HumanMessage(content=prompt),
+            ]
+            response = await self._stream_chat_response(update, user_id, llm_messages)
 
         self.memory.update_context(str(user_id), response, "assistant")
         if is_group:
             self.memory.update_context(group_key, f"HER: {response}", "assistant", max_messages=120)
         if self._metrics:
             self._metrics.record_interaction(str(user_id), message, response)
-        self._record_reinforcement(str(user_id), message, response, task_succeeded=True)
+        self._record_reinforcement(str(user_id), message, response, task_succeeded=task_succeeded)
         if previous_assistant_message:
-            # Evaluate user reaction to previous assistant message as evidence-based feedback.
             self._record_reinforcement(
                 str(user_id),
                 user_message=message,
                 assistant_message=previous_assistant_message,
-                task_succeeded=True,
+                task_succeeded=task_succeeded,
             )
         self._decision_logger.log(
             event_type="assistant_response",
-            summary="Generated language-aware continuous response",
+            summary="Handled message with strict intent routing",
             user_id=str(user_id),
             source="telegram",
             details={
                 "message_preview": message[:120],
                 "language": user_language,
-                "scheduled_tasks": len(all_scheduled_tasks),
-                "had_remaining_request": bool(operator_input),
+                "mode": intent["mode"],
+                "action_confidence": intent["action_confidence"],
+                "scheduled_tasks": schedule_count,
             },
         )
-        await self._reply(update, response)
 
     async def handle_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query

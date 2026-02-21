@@ -94,6 +94,12 @@ except Exception:
 
 async def async_main(config: AppConfig) -> None:
     logger.info("🚀 Starting HER AI Assistant...")
+    logger.info(
+        "Timezone config: system_tz=%s default_user_tz=%s scheduler_tz=%s",
+        config.system_timezone,
+        config.default_user_timezone,
+        os.getenv("TZ", config.system_timezone),
+    )
     _log_runtime_config_selection()
 
     logger.info("Initializing memory system...")

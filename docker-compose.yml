@@ -55,6 +55,7 @@ services:
     - API_ADAPTER_HOST
     - API_ADAPTER_PORT
     - TZ
+    - USER_TIMEZONE
     volumes:
     - her_config:/app/config
     - ./logs:/app/logs
@@ -202,6 +203,7 @@ services:
     - 8501:8501
     environment:
       TZ: ${TZ:-UTC}
+      USER_TIMEZONE: ${USER_TIMEZONE:-UTC}
     networks:
     - her-network
     restart: unless-stopped

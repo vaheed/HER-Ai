@@ -6,6 +6,11 @@ RUNTIME_CONFIG_DIR="/app/config"
 
 mkdir -p "$RUNTIME_CONFIG_DIR"
 
+if [ -n "${TZ:-}" ] && [ -f "/usr/share/zoneinfo/$TZ" ]; then
+  ln -sf "/usr/share/zoneinfo/$TZ" /etc/localtime
+  echo "$TZ" > /etc/timezone
+fi
+
 if [ -d "$DEFAULT_CONFIG_DIR" ]; then
   # Seed missing config files into the runtime volume without overwriting user edits.
   # Some Docker setups create /app/config as a root-owned mount, which is not

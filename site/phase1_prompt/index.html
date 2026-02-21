@@ -1,0 +1,1748 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+      
+      
+        <link rel="canonical" href="https://vaheed.github.io/HER-Ai/phase1_prompt/">
+      
+      
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.2">
+    
+    
+      
+        <title>HER Phase 1 - Foundation Build Prompt - HER-Ai Documentation</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    <body dir="ltr">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#her-phase-1-foundation-build-prompt" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="HER-Ai Documentation" class="md-header__button md-logo" aria-label="HER-Ai Documentation" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            HER-Ai Documentation
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              HER Phase 1 - Foundation Build Prompt
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/vaheed/HER-Ai" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    vaheed/HER-Ai
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href=".." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../architecture/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Architecture
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../installation/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Installation
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../configuration/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Configuration
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../usage/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Usage
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../testing/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Testing
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../deployment/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Deployment
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../admin-tooling/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Admin and Tooling
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../mcp_guide/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  MCP Guide
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../examples/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Prompt Library
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../developer-guidelines/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Developer Guidelines
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../roadmap/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Roadmap
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../folders/her-core/" class="md-tabs__link">
+          
+  
+  
+  Folder Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="HER-Ai Documentation" class="md-nav__button md-logo" aria-label="HER-Ai Documentation" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    HER-Ai Documentation
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/vaheed/HER-Ai" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    vaheed/HER-Ai
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../installation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Installation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../usage/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Usage
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../testing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Testing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../deployment/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Deployment
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../admin-tooling/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Admin and Tooling
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../mcp_guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MCP Guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../examples/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Prompt Library
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../developer-guidelines/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Developer Guidelines
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../roadmap/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Roadmap
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_13" >
+        
+          
+          <label class="md-nav__link" for="__nav_13" id="__nav_13_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Folder Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_13_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_13">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Folder Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../folders/her-core/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    her-core
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../folders/her-core-agents/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    her-core agents
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../folders/her-core-telegram/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    her-core telegram
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../folders/her-core-memory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    her-core memory
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../folders/her-core-mcp/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    her-core mcp
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../folders/her-core-utils/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    her-core utils
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../folders/dashboard/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    dashboard
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../folders/config/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    config
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../folders/sandbox/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    sandbox
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../folders/tests/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    tests
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../folders/init-scripts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    init-scripts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../folders/github-workflows/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    github workflows
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../folders/docs/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    docs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#objective" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        🎯 Objective
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#project-structure-required" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        📦 Project Structure Required
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#technical-requirements" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        🔧 Technical Requirements
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="🔧 Technical Requirements">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#1-docker-compose-setup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Docker Compose Setup
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2-postgresql-database" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. PostgreSQL Database
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#3-memory-system-mem0" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Memory System (Mem0)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#4-crewai-agents" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. CrewAI Agents
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#5-llm-factory" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. LLM Factory
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#6-main-application" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. Main Application
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#7-configuration-files" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7. Configuration Files
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#8-environment-variables" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8. Environment Variables
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#9-dockerfile" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9. Dockerfile
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#10-requirements" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        10. Requirements
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#success-criteria-phase-1-complete" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ✅ Success Criteria (Phase 1 Complete)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#deliverables-checklist" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        🎯 Deliverables Checklist
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="her-phase-1-foundation-build-prompt">HER Phase 1 - Foundation Build Prompt</h1>
+<blockquote>
+<p>Copy this prompt to Claude/ChatGPT to generate the complete Phase 1 project structure</p>
+</blockquote>
+<hr />
+<h2 id="objective">🎯 Objective</h2>
+<p>Build Phase 1 (Weeks 1-3) of the HER AI Assistant: complete Docker infrastructure, memory system (Mem0 + PostgreSQL + Redis), and CrewAI agent architecture. Make it 100% functional and ready for Telegram integration.</p>
+<h2 id="project-structure-required">📦 Project Structure Required</h2>
+<pre><code>HER-Ai/
+├── docker-compose.yml
+├── .env.example
+├── README.md
+├── her-core/
+│   ├── Dockerfile
+│   ├── requirements.txt
+│   ├── main.py
+│   ├── config.py
+│   ├── memory/
+│   │   ├── __init__.py
+│   │   ├── mem0_client.py
+│   │   ├── redis_client.py
+│   │   └── schemas.sql
+│   ├── agents/
+│   │   ├── __init__.py
+│   │   ├── conversation_agent.py
+│   │   ├── reflection_agent.py
+│   │   ├── personality_agent.py
+│   │   └── base_agent.py
+│   └── utils/
+│       ├── __init__.py
+│       └── llm_factory.py
+├── config/
+│   ├── agents.yaml
+│   ├── personality.yaml
+│   └── memory.yaml
+└── init-scripts/
+    └── init-db.sql
+</code></pre>
+<h2 id="technical-requirements">🔧 Technical Requirements</h2>
+<h3 id="1-docker-compose-setup">1. Docker Compose Setup</h3>
+<p>Create <code>docker-compose.yml</code> with:
+- <strong>her-bot</strong>: Python 3.11-slim, expose port 8000 for health checks
+- <strong>postgres</strong>: pgvector/pgvector:pg16, persistent volume
+- <strong>redis</strong>: redis:7-alpine with password auth, AOF persistence
+- <strong>her-network</strong>: bridge network for all services
+- Health checks for all containers
+- Auto-restart policies</p>
+<h3 id="2-postgresql-database">2. PostgreSQL Database</h3>
+<p>Initialize with <code>init-scripts/init-db.sql</code>:</p>
+<pre><code class="language-sql">-- Install pgvector extension
+CREATE EXTENSION IF NOT EXISTS vector;
+
+-- Tables needed:
+-- 1. users (user_id, username, mode, created_at, last_interaction, preferences JSONB)
+-- 2. memories (memory_id UUID, user_id, memory_text, embedding vector(1536), category, importance_score, created_at, metadata JSONB)
+-- 3. personality_states (state_id, user_id, warmth, curiosity, assertiveness, humor, emotional_depth, version, created_at, changes JSONB)
+-- 4. conversation_logs (log_id UUID, user_id, role, message, timestamp, metadata JSONB)
+
+-- Create indexes:
+-- - Vector similarity index on memories.embedding (ivfflat)
+-- - B-tree indexes on user_id, created_at, importance_score
+</code></pre>
+<h3 id="3-memory-system-mem0">3. Memory System (Mem0)</h3>
+<p><strong>File: <code>her-core/memory/mem0_client.py</code></strong></p>
+<p>Implement <code>HERMemory</code> class:
+- Initialize Mem0 with pgvector backend (PostgreSQL)
+- Redis cache layer with 24h TTL
+- Methods:
+  - <code>add_memory(user_id, text, category, importance)</code> → stores with embedding
+  - <code>search_memories(user_id, query, limit=5)</code> → semantic search
+  - <code>get_context(user_id)</code> → fetch from Redis
+  - <code>update_context(user_id, message, role)</code> → store last 20 messages in Redis
+- Use <code>text-embedding-3-small</code> model for embeddings</p>
+<p><strong>File: <code>her-core/memory/redis_client.py</code></strong>
+- Simple Redis wrapper for context storage
+- JSON serialization/deserialization
+- TTL management (86400 seconds)</p>
+<h3 id="4-crewai-agents">4. CrewAI Agents</h3>
+<p><strong>File: <code>her-core/agents/base_agent.py</code></strong>
+- Base agent class with common LLM initialization
+- Load config from YAML files
+- Error handling wrapper</p>
+<p><strong>File: <code>her-core/agents/conversation_agent.py</code></strong></p>
+<pre><code class="language-python">from crewai import Agent
+# Role: &quot;Empathetic Conversationalist&quot;
+# Goal: &quot;Engage users warmly while remembering context&quot;
+# Tools: [memory_search] (for now)
+# LLM: OpenAI GPT-4-turbo or Groq llama3-70b (from env)
+</code></pre>
+<p><strong>File: <code>her-core/agents/reflection_agent.py</code></strong></p>
+<pre><code class="language-python">from crewai import Agent
+# Role: &quot;Memory Curator&quot;  
+# Goal: &quot;Analyze conversations and store important memories&quot;
+# No tools needed yet
+# LLM: GPT-4-turbo or Groq mixtral
+# Method: analyze_conversation(messages) → returns memories to store
+</code></pre>
+<p><strong>File: <code>her-core/agents/personality_agent.py</code></strong></p>
+<pre><code class="language-python">from crewai import Agent
+# Role: &quot;Personality Manager&quot;
+# Goal: &quot;Track and evolve personality traits safely&quot;
+# Stores: {warmth: 75, curiosity: 80, assertiveness: 60, humor: 70, emotional_depth: 85}
+# Methods: 
+#   - get_current_traits(user_id)
+#   - adjust_trait(user_id, trait_name, delta) with bounds [20, 95]
+#   - save_version(user_id, traits, notes)
+</code></pre>
+<h3 id="5-llm-factory">5. LLM Factory</h3>
+<p><strong>File: <code>her-core/utils/llm_factory.py</code></strong></p>
+<pre><code class="language-python"># Support OpenAI and Groq providers
+# Read from environment: LLM_PROVIDER, OPENAI_API_KEY, GROQ_API_KEY
+# Return configured LLM object for CrewAI
+# Default: OpenAI gpt-4-turbo-preview
+</code></pre>
+<h3 id="6-main-application">6. Main Application</h3>
+<p><strong>File: <code>her-core/main.py</code></strong></p>
+<pre><code class="language-python"># Initialize all components:
+# 1. Load environment variables
+# 2. Initialize HERMemory
+# 3. Create agents (conversation, reflection, personality)
+# 4. Simple test: simulate a conversation, store memory, retrieve it
+# 5. Print success message with all components status
+
+# For now: just validate everything works, no Telegram yet
+</code></pre>
+<h3 id="7-configuration-files">7. Configuration Files</h3>
+<p><strong>File: <code>config/agents.yaml</code></strong></p>
+<pre><code class="language-yaml">conversation_agent:
+  role: &quot;Empathetic Conversationalist&quot;
+  goal: &quot;Engage users with warmth and context&quot;
+  temperature: 0.7
+  max_tokens: 500
+
+reflection_agent:
+  role: &quot;Memory Curator&quot;
+  goal: &quot;Preserve meaningful moments&quot;
+  temperature: 0.3
+  importance_threshold: 0.7
+
+personality_agent:
+  role: &quot;Personality Manager&quot;
+  evolution_speed: &quot;medium&quot;
+  boundaries: {min: 20, max: 95}
+</code></pre>
+<p><strong>File: <code>config/personality.yaml</code></strong></p>
+<pre><code class="language-yaml">default_traits:
+  warmth: 75
+  curiosity: 80
+  assertiveness: 60
+  humor: 70
+  emotional_depth: 85
+
+immutable_values:
+  - empathy
+  - safety_awareness
+</code></pre>
+<p><strong>File: <code>config/memory.yaml</code></strong></p>
+<pre><code class="language-yaml">short_term:
+  ttl: 86400  # 24 hours
+  max_messages: 20
+
+long_term:
+  importance_threshold: 0.7
+  embedding_model: &quot;text-embedding-3-small&quot;
+  vector_dimensions: 1536
+</code></pre>
+<h3 id="8-environment-variables">8. Environment Variables</h3>
+<p><strong>File: <code>.env.example</code></strong></p>
+<pre><code class="language-bash"># LLM Provider (openai or groq)
+LLM_PROVIDER=openai
+OPENAI_API_KEY=sk-...
+GROQ_API_KEY=gsk_...
+
+# Database
+POSTGRES_USER=her
+POSTGRES_PASSWORD=changeme123
+POSTGRES_DB=her_memory
+POSTGRES_HOST=postgres
+POSTGRES_PORT=5432
+
+# Redis  
+REDIS_HOST=redis
+REDIS_PORT=6379
+REDIS_PASSWORD=changeme456
+
+# App
+LOG_LEVEL=INFO
+ENVIRONMENT=development
+</code></pre>
+<h3 id="9-dockerfile">9. Dockerfile</h3>
+<p><strong>File: <code>her-core/Dockerfile</code></strong></p>
+<pre><code class="language-dockerfile">FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update &amp;&amp; apt-get install -y \
+    postgresql-client \
+    &amp;&amp; rm -rf /var/lib/apt/lists/*
+
+# Copy requirements and install
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy application code
+COPY . .
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD python -c &quot;import sys; sys.exit(0)&quot;
+
+CMD [&quot;python&quot;, &quot;main.py&quot;]
+</code></pre>
+<h3 id="10-requirements">10. Requirements</h3>
+<p><strong>File: <code>her-core/requirements.txt</code></strong></p>
+<pre><code>crewai==0.28.0
+mem0ai==0.0.9
+openai==1.12.0
+groq==0.4.2
+psycopg2-binary==2.9.9
+redis==5.0.1
+pyyaml==6.0.1
+python-dotenv==1.0.0
+pydantic==2.6.0
+</code></pre>
+<h2 id="success-criteria-phase-1-complete">✅ Success Criteria (Phase 1 Complete)</h2>
+<p>When you run:</p>
+<pre><code class="language-bash">docker-compose up -d
+docker-compose logs -f her-bot
+</code></pre>
+<p>You should see:</p>
+<pre><code>✓ PostgreSQL connected with pgvector enabled
+✓ Redis connected
+✓ Mem0 initialized
+✓ Conversation Agent created
+✓ Reflection Agent created  
+✓ Personality Agent created
+✓ Test: Stored memory with embedding
+✓ Test: Retrieved memory via semantic search
+✓ Test: Personality trait updated
+🎉 HER Phase 1 Complete - All systems operational!
+</code></pre>
+<h2 id="deliverables-checklist">🎯 Deliverables Checklist</h2>
+<ul>
+<li>[ ] All files created with proper structure</li>
+<li>[ ] Docker containers start successfully</li>
+<li>[ ] PostgreSQL has all tables with pgvector</li>
+<li>[ ] Redis stores/retrieves context</li>
+<li>[ ] Mem0 stores/searches memories with embeddings</li>
+<li>[ ] All 3 CrewAI agents initialize</li>
+<li>[ ] Test conversation creates memories</li>
+<li>[ ] Semantic search returns relevant memories</li>
+<li>[ ] Personality traits save to database</li>
+<li>[ ] No errors in logs</li>
+</ul>
+<hr />
+<p><strong>Build this Phase 1 foundation. Make it solid, tested, and ready for Phase 2 (Telegram Bot).</strong></p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.tabs", "navigation.sections", "content.code.copy"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+    
+  </body>
+</html>

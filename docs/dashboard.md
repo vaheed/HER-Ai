@@ -105,6 +105,7 @@ POSTGRES_USER=her
 POSTGRES_PASSWORD=your_password
 POSTGRES_DB=her_memory
 TZ=UTC
+USER_TIMEZONE=UTC
 ```
 
 ## Data Sources
@@ -120,6 +121,8 @@ TZ=UTC
 - `her:decision:logs` with `event_type=sandbox_execution` - Fallback sandbox execution feed when direct list entries are unavailable
 - `her:scheduler:jobs` - Scheduled job history (last 100)
 - `her:scheduler:state` - Scheduler runtime state and upcoming jobs
+- `her:decision:logs` with `event_type=reminder_state_change` - Reminder lifecycle transitions
+- `her:decision:logs` with `event_type=timezone_conversion` - Reminder local-time to UTC conversion audit
 - `her:decision:logs` - Runtime decision log feed (last 500)
 - `her:reinforcement:events` - Reinforcement score/event history (last 1000)
 - `her:runtime:capabilities` - Latest startup capability snapshot (internet/sandbox/MCP)

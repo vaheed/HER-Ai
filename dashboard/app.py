@@ -249,6 +249,85 @@ def get_scheduler_state(redis_client) -> dict[str, Any]:
         return {}
 
 
+def get_user_timezone_stats(pg_conn) -> list[dict[str, Any]]:
+    if not pg_conn:
+        return []
+    try:
+        cursor = pg_conn.cursor()
+        cursor.execute(
+            """
+            SELECT
+                user_id,
+                COALESCE(preferences->>'user_timezone', %s) AS user_timezone,
+                COALESCE(preferences->>'chat_id', '') AS chat_id
+            FROM users
+            ORDER BY last_interaction DESC NULLS LAST
+            LIMIT 200
+            """,
+            (os.getenv("USER_TIMEZONE", "UTC"),),
+        )
+        rows = [
+            {"user_id": str(user_id), "user_timezone": str(user_timezone), "chat_id": str(chat_id)}
+            for user_id, user_timezone, chat_id in cursor.fetchall()
+        ]
+        cursor.close()
+        return rows
+    except Exception as exc:  # noqa: BLE001
+        st.warning(f"Error fetching user timezone stats: {exc}")
+        return []
+
+
+def parse_reminder_events(decision_rows: list[str]) -> pd.DataFrame:
+    rows: list[dict[str, Any]] = []
+    for raw in decision_rows:
+        payload = safe_json(raw)
+        if str(payload.get("event_type", "")) != "reminder_state_change":
+            continue
+        details = payload.get("details")
+        if not isinstance(details, dict):
+            continue
+        rows.append(
+            {
+                "timestamp": parse_ts(payload.get("timestamp")),
+                "reminder_id": str(details.get("reminder_id", "")),
+                "old_status": str(details.get("old_status", "")),
+                "new_status": str(details.get("new_status", "")),
+                "retry_count": int(details.get("retry_count", 0) or 0),
+                "max_retries": int(details.get("max_retries", 0) or 0),
+                "last_error": str(details.get("last_error", "")),
+                "chat_id": str(details.get("chat_id", "")),
+            }
+        )
+    df = pd.DataFrame(rows)
+    if not df.empty:
+        df = df[df["timestamp"].notna()].sort_values("timestamp", ascending=False)
+    return df
+
+
+def parse_timezone_conversions(decision_rows: list[str]) -> pd.DataFrame:
+    rows: list[dict[str, Any]] = []
+    for raw in decision_rows:
+        payload = safe_json(raw)
+        details = payload.get("details")
+        if not isinstance(details, dict):
+            continue
+        if str(details.get("event")) != "timezone_conversion":
+            continue
+        rows.append(
+            {
+                "timestamp": parse_ts(payload.get("timestamp")),
+                "user_id": str(details.get("user_id", "")),
+                "user_timezone": str(details.get("user_timezone", "")),
+                "local_time": str(details.get("local_time", "")),
+                "stored_utc": str(details.get("stored_utc", "")),
+            }
+        )
+    df = pd.DataFrame(rows)
+    if not df.empty:
+        df = df[df["timestamp"].notna()].sort_values("timestamp", ascending=False)
+    return df
+
+
 def parse_events(events: list[str]) -> pd.DataFrame:
     rows: list[dict[str, Any]] = []
     for raw in events:
@@ -756,12 +835,15 @@ scheduler_state = get_scheduler_state(redis_client)
 recent_chats = get_recent_chats(redis_client, limit=200)
 short_memory = get_short_memory_stats(redis_client, recent_chats)
 memory_stats = get_memory_stats(pg_conn)
+user_timezone_stats = get_user_timezone_stats(pg_conn)
 
 events_df = parse_events(metrics.get("events", []))
 logs_df = parse_logs(metrics.get("logs", []))
 exec_df = parse_execs(metrics.get("sandbox_executions", []))
 jobs_df = pd.DataFrame([safe_json(row) for row in metrics.get("scheduled_jobs", [])])
 decision_df = parse_decisions(metrics.get("decision_logs", []))
+reminder_event_df = parse_reminder_events(metrics.get("decision_logs", []))
+timezone_conversion_df = parse_timezone_conversions(metrics.get("decision_logs", []))
 if exec_df.empty:
     exec_df = parse_execs_from_decisions(metrics.get("decision_logs", []))
 
@@ -937,6 +1019,25 @@ elif page == "Executors":
 
 elif page == "Jobs":
     st.title("Scheduled Jobs")
+    st.subheader("Timezone Panel")
+    tz_col1, tz_col2 = st.columns(2)
+    with tz_col1:
+        st.metric("System TZ", os.getenv("TZ", "UTC"))
+        st.metric("Default User TZ", os.getenv("USER_TIMEZONE", "UTC"))
+    with tz_col2:
+        st.metric("Active Users with TZ", len(user_timezone_stats))
+        if user_timezone_stats:
+            tz_df = pd.DataFrame(user_timezone_stats)
+            st.dataframe(tz_df[["user_id", "user_timezone", "chat_id"]].head(20), use_container_width=True, hide_index=True)
+    if not timezone_conversion_df.empty:
+        st.markdown("**Recent Reminder Conversions**")
+        st.dataframe(
+            timezone_conversion_df[["timestamp", "user_id", "user_timezone", "local_time", "stored_utc"]].head(50),
+            use_container_width=True,
+            hide_index=True,
+        )
+    else:
+        st.info("No timezone conversion events found yet.")
 
     st.subheader("Upcoming Jobs")
     upcoming = scheduler_state.get("upcoming", []) if scheduler_state else []
@@ -966,6 +1067,50 @@ elif page == "Jobs":
                 .reset_index(name="count")
             )
             render_plotly_bar(success_df, "status", "count", "Scheduled Job Outcomes")
+
+    st.markdown("---")
+    st.subheader("Reminder State Table")
+    if not reminder_event_df.empty:
+        st.dataframe(
+            reminder_event_df[
+                ["timestamp", "reminder_id", "old_status", "new_status", "retry_count", "max_retries", "last_error", "chat_id"]
+            ].head(150),
+            use_container_width=True,
+            hide_index=True,
+        )
+    else:
+        st.info("No reminder state transitions recorded yet.")
+
+    st.markdown("---")
+    st.subheader("Reasoning Flow Viewer")
+    if decision_df.empty:
+        st.info("No reasoning flow events yet.")
+    else:
+        reasoning_trace = decision_df[decision_df["event_type"].isin(["agent_step", "autonomous_operator_action"])].copy()
+        if reasoning_trace.empty:
+            st.info("No agent step traces found yet.")
+        else:
+            st.dataframe(
+                reasoning_trace[["timestamp", "event_type", "summary", "details"]].head(150),
+                use_container_width=True,
+                hide_index=True,
+            )
+
+    st.markdown("---")
+    st.subheader("Failure Heatmap")
+    if reminder_event_df.empty:
+        st.info("No reminder failures available for heatmap.")
+    else:
+        failures = reminder_event_df[reminder_event_df["new_status"].isin(["FAILED", "RETRY"])].copy()
+        if failures.empty:
+            st.info("No reminder failures detected.")
+        else:
+            failures["failure_type"] = failures["last_error"].apply(
+                lambda text: "permanent" if "chat_not_found" in str(text).lower() or "forbidden" in str(text).lower() else "transient"
+            )
+            heat_df = failures.groupby(["new_status", "failure_type"], as_index=False).size().rename(columns={"size": "count"})
+            render_plotly_bar(heat_df, "new_status", "count", "Reminder Failure Types")
+            st.dataframe(heat_df, use_container_width=True, hide_index=True)
 
 elif page == "Decisions":
     st.title("Decision Logs")

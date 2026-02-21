@@ -9,6 +9,7 @@ import json
 from typing import Any
 from urllib.error import URLError
 from urllib.request import urlopen
+from zoneinfo import ZoneInfo
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from telegram import MessageEntity, Update
@@ -34,11 +35,13 @@ from utils.schedule_helpers import (
     parse_relative_delta,
 )
 from utils.scheduler import TaskScheduler
+from utils.user_profiles import UserProfileStore
 
 logger = logging.getLogger(__name__)
 CHAT_MODE = "CHAT_MODE"
 ACTION_MODE = "ACTION_MODE"
 ACTION_INTENT_THRESHOLD = float(os.getenv("HER_ACTION_INTENT_THRESHOLD", "0.8"))
+DEFAULT_USER_TIMEZONE = os.getenv("USER_TIMEZONE", "UTC")
 _INTERNET_DENIAL_PATTERN = re.compile(r"\b(no|not|cannot|can't)\b.*\binternet\b", re.IGNORECASE)
 _RETRY_IN_MIN_SEC_PATTERN = re.compile(r"try again in\s+(\d+)m([\d.]+)s", re.IGNORECASE)
 _RETRY_AFTER_SECONDS_PATTERN = re.compile(r"retry after\s+(\d+)s", re.IGNORECASE)
@@ -208,6 +211,7 @@ class MessageHandlers:
         self._web_search_tool = CurlWebSearchTool()
         self._decision_logger = DecisionLogger()
         self._reinforcement = ReinforcementEngine()
+        self._user_profiles = UserProfileStore(default_timezone=DEFAULT_USER_TIMEZONE)
         self._workflow_event_hub = workflow_event_hub
         self._metrics: HERMetrics | None = None
         try:
@@ -256,6 +260,59 @@ class MessageHandlers:
 
     async def _reply_markdown(self, update: Update, text: str, **kwargs: Any) -> None:
         await self._reply(update, text, parse_mode="Markdown", **kwargs)
+
+    def _safe_timezone_name(self, timezone_name: str | None) -> str:
+        candidate = str(timezone_name or DEFAULT_USER_TIMEZONE).strip() or "UTC"
+        try:
+            ZoneInfo(candidate)
+            return candidate
+        except Exception:  # noqa: BLE001
+            return "UTC"
+
+    def _resolve_user_timezone(self, user_id: int) -> str:
+        try:
+            profile = self._user_profiles.get_profile(user_id)
+            return self._safe_timezone_name(profile.timezone)
+        except Exception:  # noqa: BLE001
+            return self._safe_timezone_name(DEFAULT_USER_TIMEZONE)
+
+    def _persist_user_runtime_profile(self, user_id: int, chat_id: int, username: str | None = None) -> str:
+        existing_tz = self._resolve_user_timezone(user_id)
+        profile = self._user_profiles.persist_telegram_identity(
+            user_id=user_id,
+            chat_id=chat_id,
+            username=username,
+            timezone_name=existing_tz,
+        )
+        return self._safe_timezone_name(profile.timezone)
+
+    def _resolve_reminder_chat_id(self, user_id: int, chat_id: int | None = None) -> int | None:
+        if chat_id is not None:
+            return int(chat_id)
+        try:
+            profile = self._user_profiles.get_profile(user_id)
+            if profile.chat_id is not None:
+                return int(profile.chat_id)
+        except Exception:  # noqa: BLE001
+            return None
+        return None
+
+    def _log_timezone_conversion(self, user_id: int, user_timezone: str, local_time: str, stored_utc: str) -> None:
+        payload = {
+            "event": "timezone_conversion",
+            "user_id": user_id,
+            "user_timezone": user_timezone,
+            "local_time": local_time,
+            "stored_utc": stored_utc,
+        }
+        logger.info(payload)
+        self._decision_logger.log(
+            event_type="timezone_conversion",
+            summary=f"Reminder time normalized for user {user_id}",
+            user_id=str(user_id),
+            source="telegram",
+            details=payload,
+        )
 
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
@@ -1074,6 +1131,8 @@ class MessageHandlers:
         self,
         message: str,
         user_id: int,
+        chat_id: int | None,
+        user_timezone: str,
         language: str,
         context_rows: list[dict[str, Any]],
     ) -> tuple[list[dict[str, Any]], str]:
@@ -1109,8 +1168,10 @@ class MessageHandlers:
             "}\n"
             "Rules:\n"
             f"- Response language context is {language}.\n"
+            f"- User timezone is {self._safe_timezone_name(user_timezone)}.\n"
             "- Keep tasks in user-intended order.\n"
             "- For short imperative follow-ups with no time, default to once with run_at ~5 minutes from now.\n"
+            "- Reminder tasks must include a valid chat target; keep notify_user_id aligned with this user.\n"
             "- If the whole message is scheduling, set remaining_request to empty string.\n\n"
             f"Current UTC time: {now_utc.isoformat()}\n"
             f"Conversation history:\n{history_text}\n\n"
@@ -1137,9 +1198,12 @@ class MessageHandlers:
 
         normalized_tasks: list[dict[str, Any]] = []
         for raw_task in raw_tasks:
-            task = self._normalize_ai_schedule_task(raw_task, user_id, message, now_utc)
-            if task:
-                normalized_tasks.append(task)
+            try:
+                task = self._normalize_ai_schedule_task(raw_task, user_id, chat_id, user_timezone, message, now_utc)
+                if task:
+                    normalized_tasks.append(task)
+            except ValueError as exc:
+                logger.debug("Skipping invalid schedule task for user %s: %s", user_id, exc)
 
         return normalized_tasks, remaining_request
 
@@ -1147,6 +1211,8 @@ class MessageHandlers:
         self,
         task: Any,
         user_id: int,
+        chat_id: int | None,
+        user_timezone: str,
         source_message: str,
         now_utc: datetime,
     ) -> dict[str, Any] | None:
@@ -1189,13 +1255,25 @@ class MessageHandlers:
         else:
             normalized["notify_user_id"] = user_id
 
+        if task_type == "reminder":
+            resolved_chat_id = self._resolve_reminder_chat_id(user_id, chat_id)
+            if resolved_chat_id is None:
+                raise ValueError("Chat ID required for reminders")
+            normalized["chat_id"] = resolved_chat_id
+            normalized["status"] = "PENDING"
+            normalized["retry_count"] = 0
+            normalized["max_retries"] = max(1, int(task.get("max_retries", 3) or 3))
+            normalized["last_error"] = ""
+
         run_at = str(task.get("run_at", "")).strip()
         if run_at:
             try:
                 run_at_dt = datetime.fromisoformat(run_at.replace("Z", "+00:00"))
                 if run_at_dt.tzinfo is None:
-                    run_at_dt = run_at_dt.replace(tzinfo=UTC)
-                normalized["run_at"] = run_at_dt.astimezone(UTC).isoformat()
+                    run_at_dt = run_at_dt.replace(tzinfo=ZoneInfo(user_timezone))
+                run_at_utc = run_at_dt.astimezone(UTC)
+                normalized["run_at"] = run_at_utc.isoformat()
+                self._log_timezone_conversion(user_id, user_timezone, run_at_dt.isoformat(), run_at_utc.isoformat())
             except ValueError:
                 if interval == "once":
                     normalized["run_at"] = (now_utc + timedelta(minutes=5)).isoformat()
@@ -1206,8 +1284,9 @@ class MessageHandlers:
             if 0 <= int(hour) <= 23 and 0 <= int(minute) <= 59:
                 normalized["at"] = at_value
 
-        timezone_value = str(task.get("timezone", os.getenv("TZ", "UTC"))).strip() or "UTC"
+        timezone_value = self._safe_timezone_name(str(task.get("timezone", user_timezone)))
         normalized["timezone"] = timezone_value
+        normalized["user_timezone"] = user_timezone
 
         weekdays = self._normalize_weekdays_input(task.get("weekdays"))
         if weekdays:
@@ -1238,6 +1317,8 @@ class MessageHandlers:
         self,
         message: str,
         user_id: int,
+        chat_id: int | None,
+        user_timezone: str,
     ) -> tuple[dict[str, Any] | None, str | None]:
         if not self.scheduler:
             return None, None
@@ -1249,6 +1330,7 @@ class MessageHandlers:
             "Convert this user message into ONE scheduler task for a Telegram assistant.\n"
             "Current UTC time: "
             f"{now_utc.isoformat()}\n"
+            f"User timezone: {self._safe_timezone_name(user_timezone)}\n"
             "Return strict JSON only (no markdown) with this schema:\n"
             "{\n"
             '  "create_task": boolean,\n'
@@ -1271,7 +1353,7 @@ class MessageHandlers:
             "Rules:\n"
             "- If message is not a scheduling request, return {\"create_task\": false}.\n"
             "- Keep task safe and minimal.\n"
-            "- For one-time reminders like 'in 5 minutes', provide run_at using current UTC time.\n"
+            "- For one-time reminders like 'in 5 minutes', provide run_at in user timezone or UTC.\n"
             "- For thresholds/automation conditions, use type=workflow with steps.\n"
             "- In workflow expressions (when/expr/condition_expr), reference only defined names: "
             "source, state, task, task_name, now_utc, or keys set by earlier steps.\n"
@@ -1301,7 +1383,17 @@ class MessageHandlers:
         if not bool(payload.get("create_task")):
             return None, None
 
-        normalized_task = self._normalize_ai_schedule_task(payload.get("task"), user_id, message, now_utc)
+        try:
+            normalized_task = self._normalize_ai_schedule_task(
+                payload.get("task"),
+                user_id,
+                chat_id,
+                user_timezone,
+                message,
+                now_utc,
+            )
+        except ValueError:
+            return None, None
         if not normalized_task:
             return None, None
 
@@ -1320,17 +1412,31 @@ class MessageHandlers:
         ]
         return any(phrase in lower for phrase in phrases)
 
-    def _parse_schedule_request(self, message: str, user_id: int) -> tuple[dict[str, Any] | None, str | None]:
+    def _parse_schedule_request(
+        self,
+        message: str,
+        user_id: int,
+        chat_id: int | None,
+        user_timezone: str,
+    ) -> tuple[dict[str, Any] | None, str | None]:
         if not self.scheduler:
             return None, None
 
-        llm_task, llm_confirmation = self._parse_schedule_request_with_llm(message, user_id)
+        # Legacy call path reference: self._parse_schedule_request_with_llm(message, user_id)
+        llm_task, llm_confirmation = self._parse_schedule_request_with_llm(
+            message,
+            user_id,
+            chat_id,
+            user_timezone,
+        )
         if llm_task and llm_confirmation:
             return llm_task, llm_confirmation
 
         text = message.strip()
         lower = text.lower()
-        now = datetime.now(UTC)
+        local_tz = ZoneInfo(self._safe_timezone_name(user_timezone))
+        now_local = datetime.now(local_tz)
+        now = now_local.astimezone(UTC)
         reminder_body = self._extract_reminder_body(text)
         clock = self._parse_clock(text) or (9, 0)
         future_intent = any(
@@ -1347,7 +1453,7 @@ class MessageHandlers:
                     "interval": "daily",
                     "enabled": True,
                     "at": "20:00",
-                    "timezone": os.getenv("TZ", "UTC"),
+                    "timezone": self._safe_timezone_name(user_timezone),
                     "notify_user_id": user_id,
                     "steps": [
                         {"action": "notify", "message": "Growth check-in: what improved today and what needs support?"},
@@ -1373,9 +1479,15 @@ class MessageHandlers:
                     "type": "reminder",
                     "interval": interval,
                     "enabled": True,
+                    "timezone": self._safe_timezone_name(user_timezone),
+                    "user_timezone": self._safe_timezone_name(user_timezone),
                     "message": reminder_body,
+                    "chat_id": self._resolve_reminder_chat_id(user_id, chat_id),
+                    "status": "PENDING",
+                    "retry_count": 0,
+                    "last_error": "",
                     "notify_user_id": user_id,
-                    "max_retries": 2,
+                    "max_retries": 3,
                     "retry_delay_seconds": 30,
                 },
                 f"Got it. I'll remind you {interval.replace('_', ' ')}.",
@@ -1391,10 +1503,15 @@ class MessageHandlers:
                     "interval": "daily",
                     "enabled": True,
                     "at": f"{clock[0]:02d}:{clock[1]:02d}",
-                    "timezone": os.getenv("TZ", "UTC"),
+                    "timezone": self._safe_timezone_name(user_timezone),
+                    "user_timezone": self._safe_timezone_name(user_timezone),
                     "message": reminder_body,
+                    "chat_id": self._resolve_reminder_chat_id(user_id, chat_id),
+                    "status": "PENDING",
+                    "retry_count": 0,
+                    "last_error": "",
                     "notify_user_id": user_id,
-                    "max_retries": 2,
+                    "max_retries": 3,
                     "retry_delay_seconds": 30,
                 },
                 "Got it. I'll remind you every day.",
@@ -1402,7 +1519,7 @@ class MessageHandlers:
 
         # once a week / weekly
         if "once a week" in lower or "every week" in lower or "weekly" in lower:
-            weekday = now.weekday()
+            weekday = now_local.weekday()
             task_name = f"weekly_{self._slug(reminder_body)}_{user_id}"
             return (
                 {
@@ -1411,11 +1528,16 @@ class MessageHandlers:
                     "interval": "weekly",
                     "enabled": True,
                     "at": f"{clock[0]:02d}:{clock[1]:02d}",
-                    "timezone": os.getenv("TZ", "UTC"),
+                    "timezone": self._safe_timezone_name(user_timezone),
+                    "user_timezone": self._safe_timezone_name(user_timezone),
                     "weekdays": [weekday],
                     "message": reminder_body,
+                    "chat_id": self._resolve_reminder_chat_id(user_id, chat_id),
+                    "status": "PENDING",
+                    "retry_count": 0,
+                    "last_error": "",
                     "notify_user_id": user_id,
-                    "max_retries": 2,
+                    "max_retries": 3,
                     "retry_delay_seconds": 30,
                 },
                 "Got it. I'll remind you once a week.",
@@ -1428,8 +1550,10 @@ class MessageHandlers:
             unit = in_match.group(2)
             normalized = self._interval_unit_to_base(unit)
             delta = parse_relative_delta(value, unit)
-            run_at = now + delta
+            run_at = now_local + delta
+            run_at_utc = run_at.astimezone(UTC)
             task_name = f"once_{self._slug(reminder_body)}_{int(now.timestamp())}_{user_id}"
+            self._log_timezone_conversion(user_id, user_timezone, run_at.isoformat(), run_at_utc.isoformat())
             return (
                 {
                     "name": task_name,
@@ -1437,11 +1561,16 @@ class MessageHandlers:
                     "interval": "once",
                     "one_time": True,
                     "enabled": True,
-                    "run_at": run_at.isoformat(),
-                    "timezone": os.getenv("TZ", "UTC"),
+                    "run_at": run_at_utc.isoformat(),
+                    "timezone": self._safe_timezone_name(user_timezone),
+                    "user_timezone": self._safe_timezone_name(user_timezone),
                     "message": reminder_body,
+                    "chat_id": self._resolve_reminder_chat_id(user_id, chat_id),
+                    "status": "PENDING",
+                    "retry_count": 0,
+                    "last_error": "",
                     "notify_user_id": user_id,
-                    "max_retries": 2,
+                    "max_retries": 3,
                     "retry_delay_seconds": 30,
                 },
                 f"Got it. I'll remind you in {value} {normalized}.",
@@ -1449,8 +1578,10 @@ class MessageHandlers:
 
         # tomorrow at X
         if "tomorrow" in lower and future_intent:
-            target = (now + timedelta(days=1)).replace(hour=clock[0], minute=clock[1], second=0, microsecond=0)
+            target_local = (now_local + timedelta(days=1)).replace(hour=clock[0], minute=clock[1], second=0, microsecond=0)
+            target_utc = target_local.astimezone(UTC)
             task_name = f"tomorrow_{self._slug(reminder_body)}_{int(now.timestamp())}_{user_id}"
+            self._log_timezone_conversion(user_id, user_timezone, target_local.isoformat(), target_utc.isoformat())
             return (
                 {
                     "name": task_name,
@@ -1458,11 +1589,16 @@ class MessageHandlers:
                     "interval": "once",
                     "one_time": True,
                     "enabled": True,
-                    "run_at": target.isoformat(),
-                    "timezone": os.getenv("TZ", "UTC"),
+                    "run_at": target_utc.isoformat(),
+                    "timezone": self._safe_timezone_name(user_timezone),
+                    "user_timezone": self._safe_timezone_name(user_timezone),
                     "message": reminder_body,
+                    "chat_id": self._resolve_reminder_chat_id(user_id, chat_id),
+                    "status": "PENDING",
+                    "retry_count": 0,
+                    "last_error": "",
                     "notify_user_id": user_id,
-                    "max_retries": 2,
+                    "max_retries": 3,
                     "retry_delay_seconds": 30,
                 },
                 "Got it. I'll remind you tomorrow.",
@@ -1475,16 +1611,18 @@ class MessageHandlers:
         )
         if day_match and future_intent:
             target_day = _WEEKDAY_TO_INDEX[day_match.group(1)]
-            days_ahead = (target_day - now.weekday()) % 7
+            days_ahead = (target_day - now_local.weekday()) % 7
             if days_ahead == 0:
                 days_ahead = 7
-            target = (now + timedelta(days=days_ahead)).replace(
+            target_local = (now_local + timedelta(days=days_ahead)).replace(
                 hour=clock[0],
                 minute=clock[1],
                 second=0,
                 microsecond=0,
             )
+            target_utc = target_local.astimezone(UTC)
             task_name = f"next_{day_match.group(1)}_{self._slug(reminder_body)}_{int(now.timestamp())}_{user_id}"
+            self._log_timezone_conversion(user_id, user_timezone, target_local.isoformat(), target_utc.isoformat())
             return (
                 {
                     "name": task_name,
@@ -1492,11 +1630,16 @@ class MessageHandlers:
                     "interval": "once",
                     "one_time": True,
                     "enabled": True,
-                    "run_at": target.isoformat(),
-                    "timezone": os.getenv("TZ", "UTC"),
+                    "run_at": target_utc.isoformat(),
+                    "timezone": self._safe_timezone_name(user_timezone),
+                    "user_timezone": self._safe_timezone_name(user_timezone),
                     "message": reminder_body,
+                    "chat_id": self._resolve_reminder_chat_id(user_id, chat_id),
+                    "status": "PENDING",
+                    "retry_count": 0,
+                    "last_error": "",
                     "notify_user_id": user_id,
-                    "max_retries": 2,
+                    "max_retries": 3,
                     "retry_delay_seconds": 30,
                 },
                 f"Got it. I'll remind you next {day_match.group(1).capitalize()}.",
@@ -1504,10 +1647,16 @@ class MessageHandlers:
 
         return None, None
 
-    def _maybe_schedule_from_message(self, message: str, user_id: int) -> str | None:
+    def _maybe_schedule_from_message(
+        self,
+        message: str,
+        user_id: int,
+        chat_id: int | None,
+        user_timezone: str,
+    ) -> str | None:
         if not self.scheduler:
             return None
-        task, confirmation = self._parse_schedule_request(message, user_id)
+        task, confirmation = self._parse_schedule_request(message, user_id, chat_id, user_timezone)
         if not task or not confirmation:
             return None
 
@@ -1563,6 +1712,8 @@ class MessageHandlers:
         command: str,
         source_message: str,
         user_id: int,
+        chat_id: int | None,
+        user_timezone: str,
         confirmation: str,
     ) -> str:
         if not self.scheduler:
@@ -1573,7 +1724,10 @@ class MessageHandlers:
             return "I could not parse a valid schedule payload from the interpreter output."
 
         now_utc = datetime.now(UTC)
-        task = self._normalize_ai_schedule_task(task_payload, user_id, source_message, now_utc)
+        try:
+            task = self._normalize_ai_schedule_task(task_payload, user_id, chat_id, user_timezone, source_message, now_utc)
+        except ValueError as exc:
+            return str(exc)
         if not task:
             return "I could not normalize this schedule request into a valid task."
 
@@ -1630,7 +1784,13 @@ class MessageHandlers:
         lines.append(f"Exit code: {result['exit_code']} | Time: {result['execution_time']:.2f}s")
         return "\n\n".join(lines)
 
-    def _maybe_handle_unified_request(self, message: str, user_id: int) -> str | None:
+    def _maybe_handle_unified_request(
+        self,
+        message: str,
+        user_id: int,
+        chat_id: int | None,
+        user_timezone: str,
+    ) -> str | None:
         if self._request_interpreter is None:
             return None
         timezone_name = os.getenv("TZ", "UTC")
@@ -1659,6 +1819,8 @@ class MessageHandlers:
                 command=decision.command,
                 source_message=message,
                 user_id=user_id,
+                chat_id=chat_id,
+                user_timezone=user_timezone,
                 confirmation=decision.confirmation,
             )
         if decision.intent == "sandbox":
@@ -2154,6 +2316,7 @@ class MessageHandlers:
             raise ValueError("Message cannot be empty")
 
         chat_id = chat_id if chat_id is not None else user_id
+        user_timezone = self._persist_user_runtime_profile(user_id=user_id, chat_id=chat_id)
         execution_id = (
             self._workflow_event_hub.create_execution(user_id=str(user_id), message=message)
             if self._workflow_event_hub
@@ -2238,6 +2401,8 @@ class MessageHandlers:
                     all_scheduled_tasks, _ = self._parse_multi_intent_schedule_with_llm(
                         message=message,
                         user_id=user_id,
+                        chat_id=chat_id,
+                        user_timezone=user_timezone,
                         language=user_language,
                         context_rows=previous_context,
                     )
@@ -2492,6 +2657,11 @@ class MessageHandlers:
 
         user_id = update.effective_user.id
         chat_id = update.effective_chat.id
+        user_timezone = self._persist_user_runtime_profile(
+            user_id=user_id,
+            chat_id=chat_id,
+            username=getattr(update.effective_user, "username", None),
+        )
         message = (update.message.text or "").strip()
         if not message:
             return
@@ -2587,6 +2757,8 @@ class MessageHandlers:
                     all_scheduled_tasks, _ = self._parse_multi_intent_schedule_with_llm(
                         message=message,
                         user_id=user_id,
+                        chat_id=chat_id,
+                        user_timezone=user_timezone,
                         language=user_language,
                         context_rows=previous_context,
                     )

@@ -29,6 +29,8 @@ from utils.reinforcement import ReinforcementEngine
 from utils.schedule_helpers import normalize_weekdays_input
 
 logger = logging.getLogger(__name__)
+_TERMINAL_REMINDER_STATES = {"SENT", "FAILED"}
+_ACTIVE_REMINDER_STATES = {"PENDING", "RETRY"}
 
 
 class TaskScheduler:
@@ -54,6 +56,9 @@ class TaskScheduler:
         self._recompute_all_next_runs(datetime.now(timezone.utc))
         self._publish_scheduler_state()
         self._scheduler_task = asyncio.create_task(self._scheduler_loop())
+        system_tz = os.getenv("TZ", "UTC")
+        default_user_tz = os.getenv("USER_TIMEZONE", "UTC")
+        logger.info("Scheduler timezone config: system_tz=%s default_user_tz=%s", system_tz, default_user_tz)
         logger.info("✅ Task scheduler started with %s tasks", len(self.tasks))
 
     async def stop(self):
@@ -167,6 +172,16 @@ class TaskScheduler:
         normalized["one_time"] = bool(task.get("one_time", interval == "once"))
         normalized.setdefault("max_retries", 2)
         normalized.setdefault("retry_delay_seconds", 30)
+        if task_type == "reminder":
+            normalized["chat_id"] = self._coerce_chat_id(task.get("chat_id"))
+            normalized["status"] = str(task.get("status", "PENDING")).strip().upper() or "PENDING"
+            if normalized["status"] not in {"PENDING", "RETRY", "SENT", "FAILED"}:
+                normalized["status"] = "PENDING"
+            normalized["retry_count"] = max(0, int(task.get("retry_count", 0) or 0))
+            normalized["max_retries"] = max(1, int(task.get("max_retries", 3) or 3))
+            normalized["last_error"] = str(task.get("last_error", "") or "")
+            if not normalized["chat_id"]:
+                logger.warning("Reminder task '%s' missing chat_id; it will be marked FAILED at runtime", name)
 
         run_at_value = str(task.get("run_at", "")).strip()
         if run_at_value:
@@ -306,6 +321,12 @@ class TaskScheduler:
                 for task in self.tasks:
                     if not task.get("enabled", True):
                         continue
+                    if str(task.get("type", "")).lower() == "reminder":
+                        reminder_status = str(task.get("status", "PENDING")).upper()
+                        if reminder_status in _TERMINAL_REMINDER_STATES and bool(task.get("one_time", False)):
+                            continue
+                        if reminder_status not in _ACTIVE_REMINDER_STATES and not bool(task.get("one_time", False)):
+                            task["status"] = "PENDING"
 
                     if self._should_run(now, task):
                         success = await self._execute_task(task)
@@ -426,6 +447,15 @@ class TaskScheduler:
         return None
 
     def _compute_next_run(self, now_utc: datetime, task: dict[str, Any]) -> datetime | None:
+        if str(task.get("type", "")).lower() == "reminder":
+            reminder_status = str(task.get("status", "PENDING")).upper()
+            if reminder_status == "RETRY":
+                retry_next = self._parse_iso_timestamp(task.get("_next_run"))
+                if retry_next is not None:
+                    return retry_next
+            if reminder_status in _TERMINAL_REMINDER_STATES and bool(task.get("one_time", False)):
+                return None
+
         interval = str(task.get("interval", ""))
         last_run_dt = self._parse_iso_timestamp(task.get("_last_run"))
         run_at_dt = self._parse_iso_timestamp(task.get("run_at"))
@@ -466,6 +496,8 @@ class TaskScheduler:
         """Execute a scheduled task."""
         task_name = task.get("name", "unknown")
         task_type = task.get("type", "custom")
+        if str(task_type).lower() == "reminder":
+            return await self._execute_reminder_state_machine(task)
         max_retries = max(0, int(task.get("max_retries", 2) or 0))
         retry_delay = max(1, int(task.get("retry_delay_seconds", 30) or 30))
         attempts_total = max_retries + 1
@@ -544,6 +576,76 @@ class TaskScheduler:
             task.pop("_next_run", None)
         return success
 
+    async def _execute_reminder_state_machine(self, task: dict[str, Any]) -> bool:
+        task_name = str(task.get("name", "unknown"))
+        old_status = str(task.get("status", "PENDING")).upper()
+        retry_count = max(0, int(task.get("retry_count", 0) or 0))
+        max_retries = max(1, int(task.get("max_retries", 3) or 3))
+        result = ""
+        error = ""
+        execution_time = 0.0
+
+        if old_status not in _ACTIVE_REMINDER_STATES:
+            return old_status == "SENT"
+
+        chat_id = self._resolve_reminder_chat_id(task)
+        if chat_id is None:
+            task["status"] = "FAILED"
+            task["last_error"] = "chat_id missing or invalid"
+            self._log_reminder_state_change(task, old_status, "FAILED")
+            self._log_job_execution(task_name, "reminder", False, "", "chat_id missing or invalid", 0.0, str(task.get("_next_run", "")))
+            return False
+
+        triggered_at_utc = datetime.now(timezone.utc)
+        user_timezone = str(task.get("user_timezone", task.get("timezone", os.getenv("USER_TIMEZONE", "UTC")))).strip() or "UTC"
+        reminder_text = self._render_reminder_text_with_local_time(
+            text=str(task.get("message", "Reminder")),
+            triggered_at_utc=triggered_at_utc,
+            timezone_name=user_timezone,
+        )
+
+        start_time = time.time()
+        sent, failure_reason = await self._send_telegram_notification(chat_id, reminder_text)
+        execution_time = time.time() - start_time
+
+        if sent:
+            task["retry_count"] = 0
+            task["last_error"] = ""
+            task["status"] = "SENT"
+            result = f"Reminder sent to chat_id={chat_id}"
+            self._log_reminder_state_change(task, old_status, "SENT")
+            self._log_job_execution(task_name, "reminder", True, result, "", execution_time, str(task.get("_next_run", "")))
+            if bool(task.get("one_time", False)):
+                task["enabled"] = False
+                task.pop("_next_run", None)
+            else:
+                task["status"] = "PENDING"
+                self._log_reminder_state_change(task, "SENT", "PENDING")
+            return True
+
+        retry_count += 1
+        task["retry_count"] = retry_count
+        task["last_error"] = str(failure_reason or "transient_error")
+        permanent = bool(failure_reason in {"chat_not_found", "forbidden", "chat_missing"})
+
+        if permanent or retry_count >= max_retries:
+            task["status"] = "FAILED"
+            error = f"Reminder permanent failure for chat_id={chat_id}: {failure_reason}"
+            self._log_reminder_state_change(task, old_status, "FAILED")
+            self._log_job_execution(task_name, "reminder", False, "", error, execution_time, str(task.get("_next_run", "")))
+            if bool(task.get("one_time", False)):
+                task["enabled"] = False
+                task.pop("_next_run", None)
+            return False
+
+        backoff_seconds = 10 * (3 ** max(0, retry_count - 1))
+        task["status"] = "RETRY"
+        task["_next_run"] = (triggered_at_utc + timedelta(seconds=backoff_seconds)).isoformat()
+        error = f"Reminder transient failure for chat_id={chat_id}: {failure_reason}; retry in {backoff_seconds}s"
+        self._log_reminder_state_change(task, old_status, "RETRY")
+        self._log_job_execution(task_name, "reminder", False, "", error, execution_time, str(task.get("_next_run", "")))
+        return False
+
     def _log_job_execution(
         self,
         name: str,
@@ -611,19 +713,17 @@ class TaskScheduler:
             logger.info("Executing custom command: %s", command)
 
     async def _execute_reminder_task(self, task: dict[str, Any]) -> str:
-        user_id = self._resolve_notify_user_id(task)
-        if user_id is None:
-            return "Reminder permanent failure: notify_user_id missing or invalid"
-
+        # Kept for backward compatibility with older call sites.
+        chat_id = self._resolve_reminder_chat_id(task)
+        if chat_id is None:
+            return "Reminder permanent failure: chat_id missing or invalid"
         message = str(task.get("message", "Reminder"))
-        sent, failure_reason = await self._send_telegram_notification(user_id, message)
+        sent, failure_reason = await self._send_telegram_notification(chat_id, message)
         if sent:
-            return f"Reminder sent to {user_id}"
+            return f"Reminder sent to {chat_id}"
         if failure_reason in {"chat_not_found", "forbidden"}:
-            task["enabled"] = False
-            task.pop("_next_run", None)
-            return f"Reminder permanent failure for {user_id}: {failure_reason}"
-        return f"Reminder failed for {user_id}"
+            return f"Reminder permanent failure for {chat_id}: {failure_reason}"
+        return f"Reminder failed for {chat_id}"
 
     async def _execute_self_optimization_task(self, task: dict[str, Any]) -> str:
         summary = self._reinforcement.summarize_recent_patterns(window=500)
@@ -731,6 +831,52 @@ class TaskScheduler:
             if value > 0:
                 return value
         return None
+
+    @staticmethod
+    def _coerce_chat_id(value: Any) -> int | None:
+        text = str(value or "").strip()
+        if text and text.lstrip("-").isdigit():
+            return int(text)
+        return None
+
+    def _resolve_reminder_chat_id(self, task: dict[str, Any]) -> int | None:
+        chat_id = self._coerce_chat_id(task.get("chat_id"))
+        if chat_id is not None:
+            return chat_id
+        notify_user = self._resolve_notify_user_id(task)
+        if notify_user is not None:
+            return notify_user
+        return None
+
+    def _log_reminder_state_change(self, task: dict[str, Any], old_status: str, new_status: str) -> None:
+        payload = {
+            "event": "reminder_state_change",
+            "reminder_id": str(task.get("name", "unknown")),
+            "old_status": old_status,
+            "new_status": new_status,
+            "retry_count": int(task.get("retry_count", 0) or 0),
+            "max_retries": int(task.get("max_retries", 3) or 3),
+            "last_error": str(task.get("last_error", "") or ""),
+            "chat_id": task.get("chat_id"),
+            "next_run": task.get("_next_run", ""),
+        }
+        logger.info(payload)
+        self._decision_logger.log(
+            event_type="reminder_state_change",
+            summary=f"Reminder {task.get('name', 'unknown')} {old_status} -> {new_status}",
+            source="scheduler",
+            details=payload,
+        )
+
+    @staticmethod
+    def _render_reminder_text_with_local_time(text: str, triggered_at_utc: datetime, timezone_name: str) -> str:
+        tz_name = timezone_name.strip() or "UTC"
+        try:
+            local_dt = triggered_at_utc.astimezone(ZoneInfo(tz_name))
+            stamp = local_dt.strftime("%Y-%m-%d %H:%M")
+            return f"{text}\n\n🕒 {stamp} ({tz_name})"
+        except Exception:  # noqa: BLE001
+            return text
 
     @staticmethod
     def _safe_eval(expression: str, context: dict[str, Any]) -> Any:
@@ -1007,6 +1153,14 @@ class TaskScheduler:
             if not task.get("enabled", True):
                 continue
             next_run = str(task.get("_next_run", "")).strip()
+            next_run_user_tz = ""
+            next_run_dt = self._parse_iso_timestamp(next_run)
+            user_tz_name = str(task.get("user_timezone", task.get("timezone", os.getenv("USER_TIMEZONE", "UTC")))).strip() or "UTC"
+            if next_run_dt is not None:
+                try:
+                    next_run_user_tz = next_run_dt.astimezone(ZoneInfo(user_tz_name)).isoformat()
+                except Exception:  # noqa: BLE001
+                    next_run_user_tz = next_run
             upcoming.append(
                 {
                     "name": task.get("name", "unknown"),
@@ -1018,7 +1172,12 @@ class TaskScheduler:
                     "one_time": bool(task.get("one_time", False)),
                     "max_retries": int(task.get("max_retries", 2) or 0),
                     "retry_delay_seconds": int(task.get("retry_delay_seconds", 30) or 0),
+                    "status": str(task.get("status", "PENDING")),
+                    "retry_count": int(task.get("retry_count", 0) or 0),
+                    "last_error": str(task.get("last_error", "") or ""),
+                    "chat_id": task.get("chat_id"),
                     "next_run": next_run,
+                    "next_trigger_user_tz": next_run_user_tz,
                     "enabled": bool(task.get("enabled", True)),
                 }
             )
@@ -1034,6 +1193,8 @@ class TaskScheduler:
             payload = {
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "task_count": len(self.tasks),
+                "system_tz": os.getenv("TZ", "UTC"),
+                "default_user_tz": os.getenv("USER_TIMEZONE", "UTC"),
                 "upcoming": self.get_upcoming_jobs(limit=100),
             }
             client.set("her:scheduler:state", json.dumps(payload))
@@ -1064,6 +1225,8 @@ class TaskScheduler:
         normalized = self._normalize_task(task)
         if normalized is None:
             raise ValueError("Task configuration is invalid")
+        if str(normalized.get("type", "")).lower() == "reminder" and self._resolve_reminder_chat_id(normalized) is None:
+            raise ValueError("Chat ID required for reminder tasks")
         self.tasks.append(normalized)
         self._recompute_all_next_runs(datetime.now(timezone.utc))
         self._persist_runtime_state()

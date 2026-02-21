@@ -39,6 +39,7 @@ Configuration is driven by environment variables in `.env` and YAML files under 
 | `LOG_LEVEL` | `INFO` | Application log level |
 | `ENVIRONMENT` | `development` | Environment label |
 | `TZ` | `UTC` | Global timezone |
+| `USER_TIMEZONE` | `UTC` | Default user timezone for reminder parsing/display |
 | `STARTUP_WARMUP_ENABLED` | `false` | Optional startup warmup compatibility check |
 | `WORKFLOW_DEBUG_SERVER_ENABLED` | `true` | Enable realtime workflow DAG server |
 | `WORKFLOW_DEBUG_HOST` | `0.0.0.0` | Workflow debug server bind host |

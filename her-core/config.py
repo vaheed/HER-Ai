@@ -1,5 +1,6 @@
 import os
 from dataclasses import dataclass, field
+from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 
@@ -16,6 +17,15 @@ def _env_bool(name: str, default: bool) -> bool:
 def _env_csv(name: str) -> list[str]:
     value = os.getenv(name, "")
     return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _valid_timezone_name(value: str, fallback: str = "UTC") -> str:
+    candidate = (value or fallback).strip() or fallback
+    try:
+        ZoneInfo(candidate)
+        return candidate
+    except Exception:  # noqa: BLE001
+        return fallback
 
 
 @dataclass
@@ -70,6 +80,8 @@ class AppConfig:
     api_adapter_port: int = int(os.getenv("API_ADAPTER_PORT", "8082"))
     api_adapter_bearer_token: str = os.getenv("API_ADAPTER_BEARER_TOKEN", "")
     api_adapter_model_name: str = os.getenv("API_ADAPTER_MODEL_NAME", "her-chat-1")
+    system_timezone: str = _valid_timezone_name(os.getenv("TZ", "UTC"), "UTC")
+    default_user_timezone: str = _valid_timezone_name(os.getenv("USER_TIMEZONE", "UTC"), "UTC")
 
     log_level: str = os.getenv("LOG_LEVEL", "INFO")
     environment: str = os.getenv("ENVIRONMENT", "development")

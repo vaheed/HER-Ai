@@ -48,9 +48,11 @@ Persistence behavior:
 - fallback (if config path read-only): Redis key `her:scheduler:tasks_override`
 
 Reminder delivery safeguards:
+- `chat_id` is mandatory for reminder tasks and is persisted from Telegram interactions.
 - `notify_user_id` must be a positive numeric Telegram chat/user id.
 - Invalid/missing ids fail fast and are not treated as successful sends.
 - Permanent Telegram delivery errors (for example `Chat not found` or bot forbidden) disable the reminder task to prevent retry loops.
+- Reminder states are explicit: `PENDING`, `RETRY`, `SENT`, `FAILED`.
 
 ## MCP and Sandbox Tooling
 

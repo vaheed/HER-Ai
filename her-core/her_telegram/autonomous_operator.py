@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from typing import Any, Callable
 
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -46,6 +47,7 @@ _STRICT_FORMAT_PROMPT = (
     "}\n"
     "Any other keys or formats are invalid."
 )
+_ERROR_MARKERS = ("traceback", "exception", "error:", "command not available")
 
 
 class AutonomousSandboxOperator:
@@ -67,6 +69,23 @@ class AutonomousSandboxOperator:
         self._command_timeout_seconds = max(1, int(command_timeout_seconds))
         self._cpu_time_limit_seconds = max(1, int(cpu_time_limit_seconds))
         self._memory_limit_mb = max(64, int(memory_limit_mb))
+        self._allowed_binaries = {
+            "dig",
+            "ping",
+            "mtr",
+            "traceroute",
+            "nmap",
+            "openssl",
+            "curl",
+            "wget",
+            "python3",
+            "node",
+            "bash",
+            "ls",
+            "cat",
+            "whois",
+            "nslookup",
+        }
 
     def execute(self, user_request: str, user_id: int) -> dict[str, Any]:
         return self.execute_with_history(
@@ -108,45 +127,76 @@ class AutonomousSandboxOperator:
             ),
         ]
         executed_in_sandbox = False
+        seen_commands: set[str] = set()
+        steps = 0
 
-        for _ in range(self._max_steps):
+        while steps < min(self._max_steps, 5):
+            steps += 1
             raw, _ = self._llm_invoke(llm_messages, user_id)
             action = self._parse_action(raw)
             if action is None:
                 llm_messages.append(SystemMessage(content=_INVALID_JSON_FEEDBACK))
                 continue
 
+            logger.info(
+                {
+                    "event": "agent_step",
+                    "step": steps,
+                    "action": "command" if "command" in action else ("analysis" if "done" not in action else "synthesize"),
+                    "command": action.get("command"),
+                }
+            )
             self._decision_logger.log(
-                event_type="autonomous_operator_action",
-                summary=f"Autonomous action for user {user_id}",
+                event_type="agent_step",
+                summary=f"Agent step {steps} for user {user_id}",
                 user_id=str(user_id),
                 source="telegram",
-                details={"action": action},
+                details={"step": steps, "action": action},
             )
 
             if "command" in action:
+                command = str(action["command"]).strip()
+                if not self._validate_command(command):
+                    llm_messages.append(
+                        SystemMessage(content="Command rejected by safety policy. Use one safe command without chaining.")
+                    )
+                    continue
+                if command in seen_commands:
+                    return {"done": True, "result": "Execution stopped due to repeated identical command."}
+                seen_commands.add(command)
                 result = self._executor.execute_command(
-                    command=str(action["command"]),
+                    command=command,
                     timeout=self._command_timeout_seconds,
                     cpu_time_limit_seconds=self._cpu_time_limit_seconds,
                     memory_limit_mb=self._memory_limit_mb,
                 )
                 executed_in_sandbox = True
+                verified = self._verify_step(user_request=user_request, command=command, result=result)
                 llm_messages.append(
                     SystemMessage(
                         content=(
                             "Command execution result:\n"
                             + json.dumps(
                                 {
-                                    "stdout": result.get("output", ""),
-                                    "stderr": result.get("error", ""),
+                                    "stdout": str(result.get("output", ""))[:2500],
+                                    "stderr": str(result.get("error", ""))[:1200],
                                     "exit_code": result.get("exit_code", -1),
+                                    "verified": verified,
                                 },
                                 ensure_ascii=False,
                             )
                         )
                     )
                 )
+                if not verified:
+                    llm_messages.append(
+                        SystemMessage(
+                            content=(
+                                "Verification failed. Output must be non-empty, relevant to the request, and error-free. "
+                                "Adapt command strategy."
+                            )
+                        )
+                    )
                 continue
 
             if "write_to" in action:
@@ -184,6 +234,34 @@ class AutonomousSandboxOperator:
 
         logger.warning("Autonomous sandbox loop reached max steps for user %s", user_id)
         return {"done": True, "result": "Execution stopped after step limit."}
+
+    def _validate_command(self, command: str) -> bool:
+        stripped = command.strip()
+        if not stripped:
+            return False
+        if any(token in stripped for token in (";", "&&", "||", "|", "`", "$(")):
+            return False
+        binary = stripped.split(" ", 1)[0].strip()
+        if binary not in self._allowed_binaries:
+            return False
+        return True
+
+    @staticmethod
+    def _verify_step(user_request: str, command: str, result: dict[str, Any]) -> bool:
+        output = str(result.get("output", "") or "").strip()
+        error = str(result.get("error", "") or "").strip().lower()
+        if bool(result.get("success")) and output:
+            pass
+        elif output:
+            pass
+        else:
+            return False
+        if any(marker in error for marker in _ERROR_MARKERS):
+            return False
+        request_tokens = {token for token in re.findall(r"[a-z0-9]{3,}", user_request.lower())}
+        command_tokens = {token for token in re.findall(r"[a-z0-9]{3,}", command.lower())}
+        relevance = len(request_tokens.intersection(command_tokens)) > 0
+        return relevance or bool(result.get("success"))
 
     @staticmethod
     def _parse_action(raw: str) -> dict[str, Any] | None:

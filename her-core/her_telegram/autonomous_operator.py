@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import re
+import time
 from typing import Any, Callable
 
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -101,6 +102,7 @@ class AutonomousSandboxOperator:
         user_id: int,
         conversation_history: list[dict[str, Any]],
         language: str,
+        on_step_event: Callable[[dict[str, Any]], None] | None = None,
     ) -> dict[str, Any]:
         history_lines: list[str] = []
         for item in conversation_history:
@@ -132,11 +134,20 @@ class AutonomousSandboxOperator:
 
         while steps < min(self._max_steps, 5):
             steps += 1
+            step_started = time.perf_counter()
             raw, _ = self._llm_invoke(llm_messages, user_id)
             action = self._parse_action(raw)
             if action is None:
                 llm_messages.append(SystemMessage(content=_INVALID_JSON_FEEDBACK))
                 continue
+            if on_step_event:
+                on_step_event(
+                    {
+                        "event": "step_start",
+                        "step_number": steps,
+                        "action": "command" if "command" in action else ("write" if "write_to" in action else "analysis"),
+                    }
+                )
 
             logger.info(
                 {
@@ -172,6 +183,17 @@ class AutonomousSandboxOperator:
                 )
                 executed_in_sandbox = True
                 verified = self._verify_step(user_request=user_request, command=command, result=result)
+                if on_step_event:
+                    on_step_event(
+                        {
+                            "event": "step_complete",
+                            "step_number": steps,
+                            "action": "command",
+                            "output_preview": str(result.get("output", ""))[:180],
+                            "verified": verified,
+                            "execution_ms": round((time.perf_counter() - step_started) * 1000.0, 2),
+                        }
+                    )
                 llm_messages.append(
                     SystemMessage(
                         content=(
@@ -224,16 +246,59 @@ class AutonomousSandboxOperator:
                         )
                     )
                 )
+                if on_step_event:
+                    on_step_event(
+                        {
+                            "event": "step_complete",
+                            "step_number": steps,
+                            "action": "write",
+                            "output_preview": str(write_result.get("error", "") or "write_ok")[:180],
+                            "verified": bool(write_result.get("success")),
+                            "execution_ms": round((time.perf_counter() - step_started) * 1000.0, 2),
+                        }
+                    )
                 continue
 
             if action.get("done") is True:
-                if not executed_in_sandbox:
+                if not executed_in_sandbox or self.requires_tool(user_request):
                     llm_messages.append(SystemMessage(content=_INVALID_JSON_FEEDBACK))
                     continue
+                if on_step_event:
+                    on_step_event(
+                        {
+                            "event": "step_complete",
+                            "step_number": steps,
+                            "action": "synthesize",
+                            "output_preview": str(action.get("result", ""))[:180],
+                            "verified": True,
+                            "execution_ms": round((time.perf_counter() - step_started) * 1000.0, 2),
+                        }
+                    )
                 return action
 
         logger.warning("Autonomous sandbox loop reached max steps for user %s", user_id)
         return {"done": True, "result": "Execution stopped after step limit."}
+
+    @staticmethod
+    def requires_tool(question: str) -> bool:
+        lower = str(question or "").lower()
+        keywords = {
+            "math",
+            "time",
+            "search",
+            "fetch",
+            "compute",
+            "system",
+            "file",
+            "data",
+            "run",
+            "execute",
+            "check",
+            "scan",
+            "price",
+            "latest",
+        }
+        return any(token in lower for token in keywords)
 
     def _validate_command(self, command: str) -> bool:
         stripped = command.strip()

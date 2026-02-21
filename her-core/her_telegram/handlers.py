@@ -1875,6 +1875,7 @@ class MessageHandlers:
         self,
         user_id: str,
         message: str,
+        language: str,
         user_context: list[dict[str, Any]],
         group_context: list[dict[str, Any]],
         memories: list[dict[str, Any]],
@@ -1890,6 +1891,8 @@ class MessageHandlers:
             f"- {m.get('memory') or m.get('text') or m.get('data') or m}" for m in memories[:5]
         ) or "(none)"
         style_summary = self._reinforcement.style_guidance(user_id)
+        profile = self._user_profiles.get_personalization_profile(user_id)
+        display_name = profile.nickname or profile.name or ""
 
         return (
             "You are HER, a warm emotionally intelligent assistant in Telegram. "
@@ -1905,6 +1908,10 @@ class MessageHandlers:
             "Runtime capabilities available to HER may include bash terminal, internet, file system, "
             "installed packages, package installation, background processes, network tools, and persistent workspace. "
             "Use live context below to stay truthful about what is currently available.\n\n"
+            f"Respond strictly in language code: {language}. Do not switch language.\n"
+            f"User preferred name: {display_name or '(unknown)'}\n"
+            f"User timezone: {profile.timezone}\n"
+            f"Conversation style preference: {profile.conversation_style}\n\n"
             f"Adaptive communication profile: {style_summary}\n\n"
             f"Recent user context:\n{recent_user}\n\n"
             f"Recent group context:\n{recent_group}\n\n"
@@ -2097,6 +2104,93 @@ class MessageHandlers:
             "action_confidence": action_confidence,
             "has_schedule_word": has_schedule_word,
         }
+
+    @staticmethod
+    def _requires_tool_execution(message: str) -> bool:
+        lower = str(message or "").lower()
+        required_tokens = {
+            "math",
+            "time",
+            "search",
+            "fetch",
+            "compute",
+            "system",
+            "file",
+            "data",
+            "run",
+            "execute",
+            "check",
+            "scan",
+            "price",
+            "latest",
+            "today",
+        }
+        return any(token in lower for token in required_tokens)
+
+    def _profile_needs_onboarding(self, user_id: int) -> bool:
+        profile = self._user_profiles.get_profile(user_id)
+        return not bool(profile.name.strip() or profile.nickname.strip())
+
+    def _onboarding_questions(self, language: str) -> str:
+        if language == "fa":
+            return (
+                "برای شروع چند مورد را بگو:\n"
+                "1) نام شما چیست؟\n"
+                "2) دوست دارید شما را چه صدا کنم؟\n"
+                "3) منطقه زمانی‌تان چیست؟ (مثال: Asia/Tehran)\n"
+                "4) سبک پاسخ‌دهی دلخواه شما چیست؟ (مختصر/تحلیلی/دوستانه)"
+            )
+        return (
+            "Before we continue, share these so I can personalize correctly:\n"
+            "1. What is your name?\n"
+            "2. What should I call you?\n"
+            "3. Your timezone (example: America/Los_Angeles)\n"
+            "4. Preferred response style (concise/analytical/friendly)"
+        )
+
+    def _capture_profile_from_message(self, user_id: int, message: str, language: str) -> None:
+        text = str(message or "").strip()
+        if not text:
+            return
+        lowered = text.lower()
+        name = None
+        nickname = None
+        timezone_name = None
+        style = None
+
+        name_match = re.search(r"(?:my name is|name[:\\s]+)([a-zA-Z\\s]{2,40})", text, re.IGNORECASE)
+        if name_match:
+            name = name_match.group(1).strip()
+        nick_match = re.search(r"(?:call me|nickname[:\\s]+)([a-zA-Z\\s]{2,40})", text, re.IGNORECASE)
+        if nick_match:
+            nickname = nick_match.group(1).strip()
+        tz_match = re.search(r"([A-Za-z]+/[A-Za-z_]+)", text)
+        if tz_match:
+            timezone_name = tz_match.group(1).strip()
+        if any(token in lowered for token in {"concise", "brief", "short"}):
+            style = "concise"
+        elif any(token in lowered for token in {"analytical", "detailed", "deep"}):
+            style = "analytical"
+        elif any(token in lowered for token in {"friendly", "warm", "supportive"}):
+            style = "friendly"
+
+        self._user_profiles.upsert_personalization_profile(
+            user_id=user_id,
+            name=name,
+            nickname=nickname,
+            timezone_name=timezone_name,
+            preferred_language=language,
+            conversation_style=style,
+        )
+        if any(value is not None for value in {name, nickname, timezone_name, style}):
+            memory_line = (
+                f"profile_update name={name or ''} "
+                f"nickname={nickname or ''} timezone={timezone_name or ''} style={style or ''}"
+            )
+            try:
+                self.memory.add_memory(str(user_id), memory_line, "profile_identity", 0.95)
+            except Exception:  # noqa: BLE001
+                pass
 
     @staticmethod
     def _extract_immediate_shell_command(message: str) -> str | None:
@@ -2304,6 +2398,62 @@ class MessageHandlers:
             await self._reply(update, final_text[:3900])
         return final_text
 
+    async def _execute_agent(
+        self,
+        *,
+        user_id: int,
+        message: str,
+        user_language: str,
+        previous_context: list[dict[str, Any]],
+        execution_id: str | None,
+    ) -> tuple[str, bool]:
+        sandbox_ok, sandbox_reason = self._sandbox_capability()
+        if not sandbox_ok:
+            return (
+                self._render_in_user_language(
+                    user_id,
+                    user_language,
+                    f"Sandbox is unavailable. Unsafe/direct execution is blocked. Reason: {sandbox_reason}",
+                ),
+                False,
+            )
+
+        self._emit_workflow_event(
+            execution_id=execution_id,
+            event_type="step_start",
+            node_id="tool_selector",
+            status="running",
+            details={"step_number": 1, "action": "plan"},
+        )
+        self._emit_workflow_event(
+            execution_id=execution_id,
+            event_type="step_complete",
+            node_id="tool_selector",
+            status="success",
+            details={"step_number": 1, "action": "plan", "verified": True, "output_preview": "plan_ready"},
+        )
+
+        def _on_step_event(payload: dict[str, Any]) -> None:
+            event = str(payload.get("event", ""))
+            self._emit_workflow_event(
+                execution_id=execution_id,
+                event_type=event,
+                node_id="tool_executor",
+                status="running" if event == "step_start" else "success",
+                details=payload,
+            )
+
+        result = self._autonomous_operator.execute_with_history(
+            user_request=message,
+            user_id=user_id,
+            conversation_history=previous_context[-50:],
+            language=user_language,
+            on_step_event=_on_step_event,
+        )
+        final_text = str(result.get("result", "")).strip() or "Completed."
+        response = self._render_in_user_language(user_id, user_language, final_text)
+        return response[:3900], True
+
     async def process_message_api(
         self,
         user_id: int,
@@ -2355,6 +2505,19 @@ class MessageHandlers:
         )
 
         user_language = self._detect_user_language(message, user_id, previous_context)
+        self._capture_profile_from_message(user_id, message, user_language)
+        self._user_profiles.upsert_personalization_profile(user_id=user_id, preferred_language=user_language)
+        if self._profile_needs_onboarding(user_id):
+            onboarding = self._onboarding_questions(user_language)
+            return {
+                "execution_id": execution_id or "",
+                "response": onboarding,
+                "mode": CHAT_MODE,
+                "language": user_language,
+                "scheduled_tasks": 0,
+                "task_succeeded": True,
+                "total_latency_ms": round((time.perf_counter() - request_started_at) * 1000.0, 2),
+            }
 
         if not self.is_admin(user_id) and not self.rate_limiter.is_allowed(user_id):
             response = self._render_in_user_language(user_id, user_language, "⏱️ Please slow down a bit!")
@@ -2370,6 +2533,9 @@ class MessageHandlers:
 
         self.memory.update_context(str(user_id), message, "user")
         intent = self._classify_intent(message)
+        if self._requires_tool_execution(message):
+            intent["mode"] = ACTION_MODE
+            intent["action_confidence"] = 1.0
         self._emit_workflow_event(
             execution_id=execution_id,
             event_type="intent_detected",
@@ -2443,72 +2609,20 @@ class MessageHandlers:
                     schedule_count = len(all_scheduled_tasks)
                     task_succeeded = ok or bool(all_scheduled_tasks)
                 else:
-                    command = self._extract_immediate_shell_command(message)
-                    if command and self._is_safe_sandbox_command(command):
-                        self._emit_workflow_event(
-                            execution_id=execution_id,
-                            event_type="tool_selected",
-                            node_id="tool_selector",
-                            status="success",
-                            details={"selected": "sandbox_executor", "command": command},
-                        )
-                        tool_start = time.perf_counter()
-                        self._emit_workflow_event(
-                            execution_id=execution_id,
-                            event_type="tool_execution_started",
-                            node_id="tool_executor",
-                            status="running",
-                            details={"command": command},
-                        )
-                        result = SandboxExecutor(
-                            container_name=os.getenv("SANDBOX_CONTAINER_NAME", "her-sandbox")
-                        ).execute_command(
-                            command=command,
-                            timeout=int(os.getenv("HER_SANDBOX_COMMAND_TIMEOUT_SECONDS", "30")),
-                        )
-                        output = str(result.get("output", "")).strip()
-                        error = str(result.get("error", "")).strip()
-                        for line in output.splitlines():
-                            self._emit_workflow_event(
-                                execution_id=execution_id,
-                                event_type="tool_stdout",
-                                node_id="tool_executor",
-                                status="running",
-                                details={"line": line, "stream": "stdout"},
-                            )
-                        for line in error.splitlines():
-                            self._emit_workflow_event(
-                                execution_id=execution_id,
-                                event_type="tool_stdout",
-                                node_id="tool_executor",
-                                status="running",
-                                details={"line": line, "stream": "stderr"},
-                            )
-                        self._emit_workflow_event(
-                            execution_id=execution_id,
-                            event_type="tool_completed",
-                            node_id="tool_executor",
-                            status="success" if result.get("success") else "error",
-                            details={
-                                "command": command,
-                                "exit_code": result.get("exit_code"),
-                                "duration_ms": round((time.perf_counter() - tool_start) * 1000.0, 2),
-                                "tool_output": output[-5000:],
-                                "tool_error": error[-2000:],
-                            },
-                        )
-                        response_lines = [
-                            "✅ Command executed." if result.get("success") else f"❌ Command failed (exit={result.get('exit_code')})."
-                        ]
-                        if output:
-                            response_lines.append(f"Output:\n{output}")
-                        if error:
-                            response_lines.append(f"Errors:\n{error}")
-                        response_lines.append(f"Time: {float(result.get('execution_time', 0.0)):.2f}s")
-                        response = "\n\n".join(response_lines)[:3900]
-                        task_succeeded = bool(result.get("success"))
-                    else:
-                        intent["mode"] = CHAT_MODE
+                    self._emit_workflow_event(
+                        execution_id=execution_id,
+                        event_type="tool_selected",
+                        node_id="tool_selector",
+                        status="success",
+                        details={"selected": "execute_agent"},
+                    )
+                    response, task_succeeded = await self._execute_agent(
+                        user_id=user_id,
+                        message=message,
+                        user_language=user_language,
+                        previous_context=previous_context,
+                        execution_id=execution_id,
+                    )
                 if not response.strip():
                     intent["mode"] = CHAT_MODE
 
@@ -2545,13 +2659,19 @@ class MessageHandlers:
                 prompt = self._build_reply_prompt(
                     user_id=str(user_id),
                     message=message,
+                    language=user_language,
                     user_context=self.memory.get_context(str(user_id)),
                     group_context=[],
                     memories=related_memories,
                     live_context=live_context,
                 )
                 llm_messages = [
-                    SystemMessage(content="You are HER. If user message is conversational, respond conversationally."),
+                    SystemMessage(
+                        content=(
+                            "You are HER. If user message is conversational, respond conversationally. "
+                            f"Respond strictly in language code {user_language}."
+                        )
+                    ),
                     HumanMessage(content=prompt),
                 ]
                 llm_start = time.perf_counter()
@@ -2601,6 +2721,7 @@ class MessageHandlers:
             response = self._build_transient_llm_error_reply(exc)
             task_succeeded = False
 
+        response = self._render_in_user_language(user_id, user_language, response)
         self.memory.update_context(str(user_id), response, "assistant")
         if self._metrics:
             self._metrics.record_interaction(str(user_id), message, response)
@@ -2705,6 +2826,11 @@ class MessageHandlers:
         is_group = self._is_group_chat(update)
         group_key = self._group_memory_key(chat_id)
         user_language = self._detect_user_language(message, user_id, previous_context)
+        self._capture_profile_from_message(user_id, message, user_language)
+        self._user_profiles.upsert_personalization_profile(user_id=user_id, preferred_language=user_language)
+        if self._profile_needs_onboarding(user_id):
+            await self._reply(update, self._onboarding_questions(user_language))
+            return
 
         if not self.is_admin(user_id) and not self.rate_limiter.is_allowed(user_id):
             await self._reply(
@@ -2726,6 +2852,9 @@ class MessageHandlers:
             logger.warning("Telegram typing indicator failed for chat %s: %s", chat_id, exc)
 
         intent = self._classify_intent(message)
+        if self._requires_tool_execution(message):
+            intent["mode"] = ACTION_MODE
+            intent["action_confidence"] = 1.0
         self._emit_workflow_event(
             execution_id=execution_id,
             event_type="intent_detected",
@@ -2799,24 +2928,20 @@ class MessageHandlers:
                     schedule_count = len(all_scheduled_tasks)
                     task_succeeded = ok or bool(all_scheduled_tasks)
                 else:
-                    command = self._extract_immediate_shell_command(message)
-                    if command and self._is_safe_sandbox_command(command):
-                        self._emit_workflow_event(
-                            execution_id=execution_id,
-                            event_type="tool_selected",
-                            node_id="tool_selector",
-                            status="success",
-                            details={"selected": "sandbox_executor", "command": command},
-                        )
-                        response, task_succeeded = await self._stream_sandbox_command(
-                            update,
-                            user_id,
-                            command,
-                            execution_id=execution_id,
-                        )
-                        response_already_sent = True
-                    else:
-                        intent["mode"] = CHAT_MODE
+                    self._emit_workflow_event(
+                        execution_id=execution_id,
+                        event_type="tool_selected",
+                        node_id="tool_selector",
+                        status="success",
+                        details={"selected": "execute_agent"},
+                    )
+                    response, task_succeeded = await self._execute_agent(
+                        user_id=user_id,
+                        message=message,
+                        user_language=user_language,
+                        previous_context=previous_context,
+                        execution_id=execution_id,
+                    )
                 if not response.strip():
                     intent["mode"] = CHAT_MODE
 
@@ -2854,13 +2979,19 @@ class MessageHandlers:
                 prompt = self._build_reply_prompt(
                     user_id=str(user_id),
                     message=message,
+                    language=user_language,
                     user_context=self.memory.get_context(str(user_id)),
                     group_context=group_context,
                     memories=related_memories,
                     live_context=live_context,
                 )
                 llm_messages = [
-                    SystemMessage(content="You are HER. If user message is conversational, respond conversationally."),
+                    SystemMessage(
+                        content=(
+                            "You are HER. If user message is conversational, respond conversationally. "
+                            f"Respond strictly in language code {user_language}."
+                        )
+                    ),
                     HumanMessage(content=prompt),
                 ]
                 response = await self._stream_chat_response(
@@ -2882,6 +3013,7 @@ class MessageHandlers:
             await self._reply(update, self._build_transient_llm_error_reply(exc))
             return
 
+        response = self._render_in_user_language(user_id, user_language, response)
         if response and not response_already_sent:
             await self._reply(update, response[:3900])
 

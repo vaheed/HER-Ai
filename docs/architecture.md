@@ -11,7 +11,7 @@ HER-Ai is organized into five layers:
 2. Orchestration layer
 - Runtime composition and service boot (`her-core/main.py`)
 - CrewAI agents (`her-core/agents/*.py`)
-- Task scheduler (`her-core/utils/scheduler.py`)
+- Task scheduler (`her-core/utils/scheduler.py`, APScheduler + SQLAlchemy job store, no sleep polling)
 
 3. Intelligence and tools layer
 - LLM provider factory (`her-core/utils/llm_factory.py`)

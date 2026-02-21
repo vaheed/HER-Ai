@@ -60,6 +60,7 @@ Configuration is driven by environment variables in `.env` and YAML files under 
 | `HER_ACTION_INTENT_THRESHOLD` | `0.8` | Minimum confidence required to switch from chat mode to action mode |
 | `HER_SANDBOX_CPU_TIME_LIMIT_SECONDS` | `20` | Sandbox CPU time cap |
 | `HER_SANDBOX_MEMORY_LIMIT_MB` | `512` | Sandbox memory cap |
+| `SCHEDULER_DATABASE_URL` | `` | APScheduler SQLAlchemy job-store URL (defaults to PostgreSQL env values) |
 | `MCP_CONFIG_PATH` | `mcp_servers.yaml` | MCP profile file name |
 | `MCP_SERVER_START_TIMEOUT_SECONDS` | `60` | Timeout per MCP server startup |
 | `SANDBOX_CONTAINER_NAME` | `her-sandbox` | Container target for sandbox tools |

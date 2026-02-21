@@ -79,6 +79,8 @@ Detailed setup: `docs/installation.md`
 - Adaptive communication tendencies (concise/helpful/empathy/initiative)
 - Persisted reinforcement events and profile updates
 - Weekly self-optimization scheduler task
+- APScheduler persistent SQL job store (restart-safe schedules)
+- Daily proactive dispatcher (1-3 randomized messages/user with profile safeguards)
 
 ### Agent Architecture (CrewAI)
 
@@ -204,6 +206,7 @@ REDIS_PASSWORD=changeme456
 MCP_CONFIG_PATH=mcp_servers.yaml
 MCP_SERVER_START_TIMEOUT_SECONDS=60
 SANDBOX_CONTAINER_NAME=her-sandbox
+SCHEDULER_DATABASE_URL=
 HER_CONFIG_DIR=/app/config
 DOCKER_GID=998
 TZ=UTC

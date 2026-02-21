@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from utils.state_models import UserPersonalizationProfile
+
 logger = logging.getLogger(__name__)
 
 
@@ -25,6 +27,12 @@ class RuntimeUserProfile:
     chat_id: int | None
     timezone: str
     telegram_user_id: int | None
+    preferred_language: str = "en"
+    name: str = ""
+    nickname: str = ""
+    conversation_style: str = "balanced"
+    interaction_frequency: str = "normal"
+    proactive_opt_out: bool = False
 
 
 class UserProfileStore:
@@ -36,7 +44,12 @@ class UserProfileStore:
     def get_profile(self, user_id: int | str) -> RuntimeUserProfile:
         user_key = str(user_id).strip()
         if not user_key:
-            return RuntimeUserProfile(user_id="", chat_id=None, timezone=self._default_timezone, telegram_user_id=None)
+            return RuntimeUserProfile(
+                user_id="",
+                chat_id=None,
+                timezone=self._default_timezone,
+                telegram_user_id=None,
+            )
 
         connection = None
         try:
@@ -56,11 +69,18 @@ class UserProfileStore:
                 chat_id_raw = preferences.get("chat_id")
                 telegram_user_id_raw = preferences.get("telegram_user_id")
                 timezone_name = _safe_timezone_name(str(preferences.get("user_timezone", self._default_timezone)))
+                preferred_language = str(preferences.get("preferred_language", "en") or "en").strip().lower() or "en"
                 return RuntimeUserProfile(
                     user_id=user_key,
                     chat_id=int(chat_id_raw) if str(chat_id_raw).isdigit() else None,
                     timezone=timezone_name,
                     telegram_user_id=int(telegram_user_id_raw) if str(telegram_user_id_raw).isdigit() else None,
+                    preferred_language=preferred_language,
+                    name=str(preferences.get("name", "") or ""),
+                    nickname=str(preferences.get("nickname", "") or ""),
+                    conversation_style=str(preferences.get("conversation_style", "balanced") or "balanced"),
+                    interaction_frequency=str(preferences.get("interaction_frequency", "normal") or "normal"),
+                    proactive_opt_out=bool(preferences.get("proactive_opt_out", False)),
                 )
         except Exception as exc:  # noqa: BLE001
             logger.debug("User profile lookup failed for user %s: %s", user_key, exc)
@@ -81,6 +101,7 @@ class UserProfileStore:
         chat_id: int,
         username: str | None = None,
         timezone_name: str | None = None,
+        preferred_language: str | None = None,
     ) -> RuntimeUserProfile:
         user_key = str(user_id)
         resolved_tz = _safe_timezone_name(timezone_name or self._default_timezone)
@@ -89,6 +110,8 @@ class UserProfileStore:
             "chat_id": int(chat_id),
             "user_timezone": resolved_tz,
         }
+        if preferred_language:
+            payload["preferred_language"] = str(preferred_language).strip().lower() or "en"
 
         connection = None
         try:
@@ -125,6 +148,85 @@ class UserProfileStore:
             chat_id=int(chat_id),
             timezone=resolved_tz,
             telegram_user_id=int(user_id),
+            preferred_language=str(payload.get("preferred_language", "en")),
+        )
+
+    def upsert_personalization_profile(
+        self,
+        *,
+        user_id: int | str,
+        name: str | None = None,
+        nickname: str | None = None,
+        timezone_name: str | None = None,
+        preferred_language: str | None = None,
+        conversation_style: str | None = None,
+        interaction_frequency: str | None = None,
+        proactive_opt_out: bool | None = None,
+    ) -> RuntimeUserProfile:
+        user_key = str(user_id).strip()
+        if not user_key:
+            return self.get_profile("")
+        updates: dict[str, Any] = {}
+        if name is not None:
+            updates["name"] = str(name).strip()
+        if nickname is not None:
+            updates["nickname"] = str(nickname).strip()
+        if timezone_name is not None:
+            updates["user_timezone"] = _safe_timezone_name(timezone_name, self._default_timezone)
+        if preferred_language is not None:
+            updates["preferred_language"] = str(preferred_language).strip().lower() or "en"
+        if conversation_style is not None:
+            updates["conversation_style"] = str(conversation_style).strip() or "balanced"
+        if interaction_frequency is not None:
+            updates["interaction_frequency"] = str(interaction_frequency).strip() or "normal"
+        if proactive_opt_out is not None:
+            updates["proactive_opt_out"] = bool(proactive_opt_out)
+        if not updates:
+            return self.get_profile(user_key)
+
+        connection = None
+        try:
+            import psycopg2
+
+            connection = psycopg2.connect(
+                dbname=os.getenv("POSTGRES_DB", "her_memory"),
+                user=os.getenv("POSTGRES_USER", "her"),
+                password=os.getenv("POSTGRES_PASSWORD", ""),
+                host=os.getenv("POSTGRES_HOST", "postgres"),
+                port=int(os.getenv("POSTGRES_PORT", "5432")),
+            )
+            with connection, connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    INSERT INTO users (user_id, last_interaction, preferences)
+                    VALUES (%s, NOW(), %s::jsonb)
+                    ON CONFLICT (user_id)
+                    DO UPDATE SET
+                        last_interaction = NOW(),
+                        preferences = COALESCE(users.preferences, '{}'::jsonb) || EXCLUDED.preferences
+                    """,
+                    (user_key, json.dumps(updates)),
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Failed to upsert personalization profile for user %s: %s", user_key, exc)
+        finally:
+            if connection is not None:
+                connection.close()
+        return self.get_profile(user_key)
+
+    def get_personalization_profile(self, user_id: int | str) -> UserPersonalizationProfile:
+        runtime = self.get_profile(user_id)
+        return UserPersonalizationProfile(
+            user_id=runtime.user_id,
+            name=runtime.name,
+            nickname=runtime.nickname,
+            timezone=runtime.timezone,
+            preferred_language=runtime.preferred_language,
+            conversation_style=runtime.conversation_style,
+            interaction_frequency=runtime.interaction_frequency,
+            proactive_opt_out=runtime.proactive_opt_out,
+            telegram_user_id=runtime.telegram_user_id,
+            chat_id=runtime.chat_id,
         )
 
     def resolve_user_timezone(self, user_id: int | str) -> str:

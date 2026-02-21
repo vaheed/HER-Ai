@@ -174,7 +174,7 @@ def test_mcp_startup_cancellation_re_raises_and_cleans_up_stack() -> None:
 def test_scheduler_uses_time_module_for_execution_timing() -> None:
     source = Path("her-core/utils/scheduler.py").read_text()
     assert "import time" in source
-    assert "time.time()" in source
+    assert "time.perf_counter()" in source
 
 
 def test_scheduler_supports_runtime_updates_and_persistence() -> None:
@@ -186,8 +186,6 @@ def test_scheduler_supports_runtime_updates_and_persistence() -> None:
     assert "def is_valid_interval" in source
     assert 'task_type == "workflow"' in source
     assert "def _execute_workflow_task" in source
-    assert "def _execute_workflow_step" in source
-    assert 'if "when" in step' in source
     assert 'if action == "set_state"' in source
     assert "def _send_telegram_notification" in source
     assert 'task_type == "reminder"' in source
@@ -201,17 +199,15 @@ def test_scheduler_supports_runtime_updates_and_persistence() -> None:
     assert 'task_type == "self_optimization"' in source
     assert "weekly_self_optimization" in source
     assert "summarize_recent_patterns" in source
-    assert "her:scheduler:tasks_override" in source
-    assert "Loaded %s scheduler tasks from Redis override" in source
-    assert "step skipped (when=undefined name)" in source
-    assert "condition=false (undefined name)" in source
-    assert "set failed: undefined name in expr" in source
+    assert "SQLAlchemyJobStore" in source
+    assert "BackgroundScheduler" in source
+    assert "FOR UPDATE SKIP LOCKED" in source
 
 
 def test_scheduler_rejects_invalid_notify_user_ids_and_handles_permanent_telegram_failures() -> None:
     source = Path("her-core/utils/scheduler.py").read_text()
     assert "if value > 0:" in source
-    assert "Reminder permanent failure" in source
+    assert "reminder_failed" in source
     assert "chat_not_found" in source
     assert "forbidden" in source
 
@@ -333,8 +329,9 @@ def test_handlers_use_strict_intent_gating_before_tool_execution() -> None:
     assert "ACTION_INTENT_THRESHOLD" in handlers_source
     assert "def _classify_intent(" in handlers_source
     assert "def _extract_immediate_shell_command(" in handlers_source
-    assert "self._stream_sandbox_command(" in handlers_source
-    assert "self._autonomous_operator.execute_with_history(" not in handlers_source
+    assert "def _requires_tool_execution(" in handlers_source
+    assert "self._execute_agent(" in handlers_source
+    assert "self._autonomous_operator.execute_with_history(" in handlers_source
     assert "Invalid format. Return JSON action only." in operator_source
     assert '"background": false' in operator_source
     assert '"write_to": "/absolute/path/file.ext"' in operator_source

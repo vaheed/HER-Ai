@@ -18,7 +18,6 @@ import asyncio
 import time
 import base64
 import shutil
-import subprocess
 from datetime import datetime, timezone
 from typing import Any
 
@@ -114,27 +113,35 @@ class SandboxExecutor:
             self._log_execution(command, result, user, workdir)
             return result
 
-        if self._can_use_docker():
-            try:
-                return self._execute_via_docker(
-                    command=command,
-                    timeout=timeout,
-                    workdir=workdir,
-                    user=user,
-                    cpu_time_limit_seconds=cpu_time_limit_seconds,
-                    memory_limit_mb=memory_limit_mb,
-                )
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("Docker execution failed; falling back to native execution: %s", exc)
-
-        return self._execute_native(
-            command=command,
-            timeout=timeout,
-            workdir=workdir,
-            user=user,
-            cpu_time_limit_seconds=cpu_time_limit_seconds,
-            memory_limit_mb=memory_limit_mb,
-        )
+        if not self._can_use_docker():
+            result = {
+                "success": False,
+                "output": "",
+                "error": "❌ Sandbox unavailable. Direct/native execution is disabled by policy.",
+                "exit_code": -1,
+                "execution_time": 0.0,
+            }
+            self._log_execution(command, result, user, workdir)
+            return result
+        try:
+            return self._execute_via_docker(
+                command=command,
+                timeout=timeout,
+                workdir=workdir,
+                user=user,
+                cpu_time_limit_seconds=cpu_time_limit_seconds,
+                memory_limit_mb=memory_limit_mb,
+            )
+        except Exception as exc:  # noqa: BLE001
+            result = {
+                "success": False,
+                "output": "",
+                "error": self._sanitize_error(f"docker:{exc}"),
+                "exit_code": -1,
+                "execution_time": 0.0,
+            }
+            self._log_execution(command, result, user, workdir)
+            return result
 
     def _execute_via_docker(
         self,
@@ -208,7 +215,13 @@ class SandboxExecutor:
             return self._binary_missing_result(missing_binary)
 
         if not self._can_use_docker():
-            return await self._execute_native_stream(command=command, timeout=timeout, workdir=workdir, on_stdout_line=on_stdout_line, on_stderr_line=on_stderr_line)
+            return {
+                "success": False,
+                "output": "",
+                "error": "❌ Sandbox unavailable. Direct/native execution is disabled by policy.",
+                "exit_code": -1,
+                "execution_time": 0.0,
+            }
 
         start_time = time.time()
         stdout_lines: list[str] = []
@@ -412,55 +425,14 @@ class SandboxExecutor:
         cpu_time_limit_seconds: int = 20,
         memory_limit_mb: int = 512,
     ) -> dict[str, Any]:
-        del user  # Native fallback runs with current process privileges.
-        start_time = time.time()
-        wrapped = self._build_limited_command(
-            command=command,
-            timeout=max(1, int(timeout)),
-            cpu_time_limit_seconds=max(1, int(cpu_time_limit_seconds)),
-            memory_limit_mb=max(64, int(memory_limit_mb)),
-        )
-        try:
-            result = subprocess.run(
-                ["bash", "-lc", wrapped],
-                capture_output=True,
-                text=True,
-                timeout=max(2, int(timeout) + 5),
-                cwd=workdir if os.path.isdir(workdir) else None,
-            )
-            output = (result.stdout or "").strip()
-            error = (result.stderr or "").strip()
-            if result.returncode != 0 and not error:
-                error = self._sanitize_error(f"exit:{result.returncode}")
-            payload = {
-                "success": result.returncode == 0,
-                "output": output,
-                "error": error,
-                "exit_code": int(result.returncode),
-                "execution_time": time.time() - start_time,
-            }
-            self._log_execution(command, payload, "native", workdir)
-            return payload
-        except subprocess.TimeoutExpired:
-            payload = {
-                "success": False,
-                "output": "",
-                "error": "❌ Command timed out.",
-                "exit_code": 124,
-                "execution_time": time.time() - start_time,
-            }
-            self._log_execution(command, payload, "native", workdir)
-            return payload
-        except Exception as exc:  # noqa: BLE001
-            payload = {
-                "success": False,
-                "output": "",
-                "error": self._sanitize_error(str(exc)),
-                "exit_code": -1,
-                "execution_time": time.time() - start_time,
-            }
-            self._log_execution(command, payload, "native", workdir)
-            return payload
+        del command, timeout, workdir, user, cpu_time_limit_seconds, memory_limit_mb
+        return {
+            "success": False,
+            "output": "",
+            "error": "❌ Native execution disabled. Use sandbox container only.",
+            "exit_code": -1,
+            "execution_time": 0.0,
+        }
 
     async def _execute_native_stream(
         self,
@@ -470,81 +442,14 @@ class SandboxExecutor:
         on_stdout_line: Any | None = None,
         on_stderr_line: Any | None = None,
     ) -> dict[str, Any]:
-        start_time = time.time()
-        wrapped = self._build_limited_command(
-            command=command,
-            timeout=max(1, int(timeout)),
-            cpu_time_limit_seconds=max(1, int(timeout)),
-            memory_limit_mb=512,
-        )
-        stdout_lines: list[str] = []
-        stderr_lines: list[str] = []
-
-        async def _emit(callback: Any | None, line: str) -> None:
-            if callback is None:
-                return
-            if asyncio.iscoroutinefunction(callback):
-                await callback(line)
-            else:
-                callback(line)
-
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                "bash",
-                "-lc",
-                wrapped,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                cwd=workdir if os.path.isdir(workdir) else None,
-            )
-
-            async def _consume(stream: Any, sink: list[str], cb: Any | None) -> None:
-                while True:
-                    raw = await stream.readline()
-                    if not raw:
-                        break
-                    line = raw.decode("utf-8", errors="replace").rstrip("\n")
-                    sink.append(line)
-                    await _emit(cb, line)
-
-            out_task = asyncio.create_task(_consume(proc.stdout, stdout_lines, on_stdout_line))
-            err_task = asyncio.create_task(_consume(proc.stderr, stderr_lines, on_stderr_line))
-            await asyncio.wait_for(proc.wait(), timeout=max(2, int(timeout) + 5))
-            await out_task
-            await err_task
-            exit_code = int(proc.returncode or 0)
-            error_text = "\n".join(stderr_lines).strip()
-            if exit_code != 0 and not error_text:
-                error_text = self._sanitize_error(f"exit:{exit_code}")
-            payload = {
-                "success": exit_code == 0,
-                "output": "\n".join(stdout_lines).strip(),
-                "error": error_text,
-                "exit_code": exit_code,
-                "execution_time": time.time() - start_time,
-            }
-            self._log_execution(command, payload, "native", workdir)
-            return payload
-        except TimeoutError:
-            payload = {
-                "success": False,
-                "output": "\n".join(stdout_lines).strip(),
-                "error": "❌ Command timed out.",
-                "exit_code": 124,
-                "execution_time": time.time() - start_time,
-            }
-            self._log_execution(command, payload, "native", workdir)
-            return payload
-        except Exception as exc:  # noqa: BLE001
-            payload = {
-                "success": False,
-                "output": "\n".join(stdout_lines).strip(),
-                "error": self._sanitize_error(str(exc)),
-                "exit_code": -1,
-                "execution_time": time.time() - start_time,
-            }
-            self._log_execution(command, payload, "native", workdir)
-            return payload
+        del command, timeout, workdir, on_stdout_line, on_stderr_line
+        return {
+            "success": False,
+            "output": "",
+            "error": "❌ Native execution disabled. Use sandbox container only.",
+            "exit_code": -1,
+            "execution_time": 0.0,
+        }
 
     def _log_execution(self, command: str, result: dict[str, Any], user: str, workdir: str):
         """Log execution to Redis metrics if available."""

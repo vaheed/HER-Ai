@@ -1,823 +1,889 @@
-"""Task scheduler for HER AI Assistant.
+"""Persistent APScheduler runtime for HER.
 
-Supports cron-like scheduling for:
-- Hourly tasks
-- Daily tasks
-- Custom interval tasks
-- Time-of-day reminders and workflow notifications
+Scheduler rules:
+- No cron daemon and no sleep polling loops.
+- All recurring work is registered as APScheduler jobs.
+- Jobs survive restart via SQLAlchemyJobStore.
 """
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import os
+import random
+import re
+import threading
 import time
-from datetime import datetime, timedelta, timezone
+from dataclasses import dataclass
+from datetime import UTC, date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from urllib.error import HTTPError
+from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo
 
 import yaml
+from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.date import DateTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 
 from agents.personality_agent import PersonalityAgent
 from utils.config_paths import resolve_config_file
 from utils.decision_log import DecisionLogger
 from utils.reinforcement import ReinforcementEngine
 from utils.schedule_helpers import normalize_weekdays_input
+from utils.user_profiles import UserProfileStore
 
 logger = logging.getLogger(__name__)
 _TERMINAL_REMINDER_STATES = {"SENT", "FAILED"}
-_ACTIVE_REMINDER_STATES = {"PENDING", "RETRY"}
+
+
+@dataclass
+class _LockHandle:
+    connection: Any
 
 
 class TaskScheduler:
-    """Cron-like task scheduler for HER."""
+    """APScheduler-backed persistent task scheduler."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.tasks: list[dict[str, Any]] = []
         self.running = False
-        self._scheduler_task: asyncio.Task | None = None
         self._config_path: Path | None = None
         self._decision_logger = DecisionLogger()
         self._reinforcement = ReinforcementEngine()
+        self._user_profiles = UserProfileStore(default_timezone=os.getenv("USER_TIMEZONE", "UTC"))
+        self._start_lock = threading.Lock()
+        self._scheduler: BackgroundScheduler | None = None
+        self._jobstores = {
+            "default": SQLAlchemyJobStore(url=self._scheduler_db_url()),
+        }
 
-    async def start(self):
-        """Start the scheduler."""
-        if self.running:
-            logger.warning("Scheduler already running")
+    async def start(self) -> None:
+        with self._start_lock:
+            if self.running:
+                logger.info("scheduler_start_skipped", extra={"event": "scheduler_start_skipped", "reason": "already_running"})
+                return
+            self._load_tasks()
+            self._ensure_baseline_tasks()
+            self._scheduler = BackgroundScheduler(jobstores=self._jobstores, timezone=self._system_timezone())
+            self._scheduler.start()
+            self._ensure_lock_table()
+            self._register_system_jobs()
+            self._sync_all_task_jobs()
+            self.running = True
+            self._publish_scheduler_state()
+            logger.info(
+                "scheduler_started",
+                extra={
+                    "event": "scheduler_started",
+                    "task_count": len(self.tasks),
+                    "timezone": self._system_timezone(),
+                    "db_url": self._scheduler_db_url(redacted=True),
+                },
+            )
+
+    async def stop(self) -> None:
+        with self._start_lock:
+            if not self.running:
+                return
+            if self._scheduler is not None:
+                self._scheduler.shutdown(wait=False)
+            self.running = False
+            self._publish_scheduler_state()
+            logger.info("scheduler_stopped", extra={"event": "scheduler_stopped"})
+
+    @staticmethod
+    def _scheduler_db_url(redacted: bool = False) -> str:
+        configured = os.getenv("SCHEDULER_DATABASE_URL", "").strip()
+        if configured:
+            if redacted:
+                return re.sub(r"://([^:/]+):([^@]+)@", r"://\\1:***@", configured)
+            return configured
+        dsn = (
+            f"postgresql+psycopg2://{os.getenv('POSTGRES_USER', 'her')}:{os.getenv('POSTGRES_PASSWORD', '')}"
+            f"@{os.getenv('POSTGRES_HOST', 'postgres')}:{int(os.getenv('POSTGRES_PORT', '5432'))}"
+            f"/{os.getenv('POSTGRES_DB', 'her_memory')}"
+        )
+        if redacted:
+            return re.sub(r"://([^:/]+):([^@]+)@", r"://\\1:***@", dsn)
+        return dsn
+
+    @staticmethod
+    def _system_timezone() -> str:
+        candidate = (os.getenv("TZ", "UTC") or "UTC").strip() or "UTC"
+        try:
+            ZoneInfo(candidate)
+            return candidate
+        except Exception:  # noqa: BLE001
+            return "UTC"
+
+    def _ensure_lock_table(self) -> None:
+        connection = None
+        try:
+            import psycopg2
+
+            connection = psycopg2.connect(
+                dbname=os.getenv("POSTGRES_DB", "her_memory"),
+                user=os.getenv("POSTGRES_USER", "her"),
+                password=os.getenv("POSTGRES_PASSWORD", ""),
+                host=os.getenv("POSTGRES_HOST", "postgres"),
+                port=int(os.getenv("POSTGRES_PORT", "5432")),
+            )
+            with connection, connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS scheduler_job_locks (
+                        lock_name TEXT PRIMARY KEY,
+                        holder TEXT,
+                        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    )
+                    """
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("scheduler_lock_table_init_failed", extra={"event": "scheduler_lock_table_init_failed", "error": str(exc)})
+        finally:
+            if connection is not None:
+                connection.close()
+
+    def _acquire_job_lock(self, lock_name: str) -> _LockHandle | None:
+        connection = None
+        try:
+            import psycopg2
+
+            connection = psycopg2.connect(
+                dbname=os.getenv("POSTGRES_DB", "her_memory"),
+                user=os.getenv("POSTGRES_USER", "her"),
+                password=os.getenv("POSTGRES_PASSWORD", ""),
+                host=os.getenv("POSTGRES_HOST", "postgres"),
+                port=int(os.getenv("POSTGRES_PORT", "5432")),
+            )
+            connection.autocommit = False
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    INSERT INTO scheduler_job_locks (lock_name, holder, updated_at)
+                    VALUES (%s, %s, NOW())
+                    ON CONFLICT (lock_name)
+                    DO NOTHING
+                    """,
+                    (lock_name, os.getenv("HOSTNAME", "unknown")),
+                )
+                cursor.execute(
+                    """
+                    SELECT lock_name
+                    FROM scheduler_job_locks
+                    WHERE lock_name = %s
+                    FOR UPDATE SKIP LOCKED
+                    """,
+                    (lock_name,),
+                )
+                row = cursor.fetchone()
+                if not row:
+                    connection.rollback()
+                    connection.close()
+                    return None
+                cursor.execute(
+                    "UPDATE scheduler_job_locks SET holder=%s, updated_at=NOW() WHERE lock_name=%s",
+                    (os.getenv("HOSTNAME", "unknown"), lock_name),
+                )
+            return _LockHandle(connection=connection)
+        except Exception as exc:  # noqa: BLE001
+            if connection is not None:
+                try:
+                    connection.rollback()
+                    connection.close()
+                except Exception:  # noqa: BLE001
+                    pass
+            logger.warning("scheduler_lock_acquire_failed", extra={"event": "scheduler_lock_acquire_failed", "lock_name": lock_name, "error": str(exc)})
+            return None
+
+    @staticmethod
+    def _release_job_lock(handle: _LockHandle | None) -> None:
+        if handle is None:
             return
-
-        self.running = True
-        self._load_tasks()
-        self._restore_runtime_state()
-        self._recompute_all_next_runs(datetime.now(timezone.utc))
-        self._publish_scheduler_state()
-        self._scheduler_task = asyncio.create_task(self._scheduler_loop())
-        system_tz = os.getenv("TZ", "UTC")
-        default_user_tz = os.getenv("USER_TIMEZONE", "UTC")
-        logger.info("Scheduler timezone config: system_tz=%s default_user_tz=%s", system_tz, default_user_tz)
-        logger.info("✅ Task scheduler started with %s tasks", len(self.tasks))
-
-    async def stop(self):
-        """Stop the scheduler."""
-        self.running = False
-        if self._scheduler_task:
-            self._scheduler_task.cancel()
+        try:
+            handle.connection.commit()
+        except Exception:  # noqa: BLE001
             try:
-                await self._scheduler_task
-            except asyncio.CancelledError:
+                handle.connection.rollback()
+            except Exception:  # noqa: BLE001
                 pass
-        self._persist_runtime_state()
-        self._publish_scheduler_state()
-        logger.info("Task scheduler stopped")
+        finally:
+            try:
+                handle.connection.close()
+            except Exception:  # noqa: BLE001
+                pass
 
-    def _load_tasks(self):
-        """Load tasks from configuration."""
+    def _load_tasks(self) -> None:
         try:
             config_path = resolve_config_file("scheduler.yaml")
             self._config_path = config_path
             if not config_path.exists():
-                logger.debug("No scheduler.yaml found, using defaults")
                 self.tasks = []
                 return
-
-            with config_path.open("r", encoding="utf-8") as f:
-                config = yaml.safe_load(f) or {}
-
-            raw_tasks = config.get("tasks", [])
-            valid_tasks: list[dict[str, Any]] = []
-            for raw_task in raw_tasks:
-                normalized = self._normalize_task(raw_task)
-                if normalized is None:
-                    continue
-                valid_tasks.append(normalized)
-            if not valid_tasks:
-                valid_tasks = self._load_tasks_override_from_redis()
-            self.tasks = valid_tasks
-            self._ensure_baseline_tasks()
-            logger.info("Loaded %s scheduled tasks", len(self.tasks))
-
+            with config_path.open("r", encoding="utf-8") as handle:
+                config = yaml.safe_load(handle) or {}
+            loaded: list[dict[str, Any]] = []
+            for raw_task in config.get("tasks", []):
+                task = self._normalize_task(raw_task)
+                if task is not None:
+                    loaded.append(task)
+            self.tasks = loaded
+            logger.info("scheduler_tasks_loaded", extra={"event": "scheduler_tasks_loaded", "count": len(self.tasks)})
         except Exception as exc:  # noqa: BLE001
-            logger.error("Failed to load scheduler config: %s", exc)
-            self.tasks = self._load_tasks_override_from_redis()
-            self._ensure_baseline_tasks()
+            logger.warning("scheduler_tasks_load_failed", extra={"event": "scheduler_tasks_load_failed", "error": str(exc)})
+            self.tasks = []
 
     def _ensure_baseline_tasks(self) -> None:
-        reflection_required = {
-            "name": "memory_reflection",
-            "type": "memory_reflection",
-            "interval": "hourly",
-            "enabled": True,
-            "max_retries": 2,
-            "retry_delay_seconds": 30,
-        }
-        self_opt_required = {
-            "name": "weekly_self_optimization",
-            "type": "self_optimization",
-            "interval": "weekly",
-            "enabled": True,
-            "at": "18:00",
-            "timezone": os.getenv("TZ", "UTC"),
-            "max_retries": 1,
-            "retry_delay_seconds": 60,
-        }
+        baseline = [
+            {
+                "name": "memory_reflection",
+                "type": "memory_reflection",
+                "interval": "hourly",
+                "enabled": True,
+                "max_retries": 2,
+                "retry_delay_seconds": 30,
+            },
+            {
+                "name": "weekly_self_optimization",
+                "type": "self_optimization",
+                "interval": "weekly",
+                "enabled": True,
+                "at": "18:00",
+                "timezone": self._system_timezone(),
+                "max_retries": 1,
+                "retry_delay_seconds": 60,
+            },
+            {
+                "name": "proactive_daily_dispatcher",
+                "type": "proactive_daily_dispatcher",
+                "interval": "daily",
+                "enabled": True,
+                "at": "08:05",
+                "timezone": self._system_timezone(),
+                "max_retries": 1,
+                "retry_delay_seconds": 60,
+            },
+        ]
+        by_name = {str(task.get("name", "")): task for task in self.tasks}
+        for item in baseline:
+            existing = by_name.get(item["name"])
+            if existing is None:
+                self.tasks.append(item)
+                continue
+            existing["enabled"] = True
+            existing["interval"] = item["interval"]
+            existing["type"] = item["type"]
+            if item.get("at"):
+                existing["at"] = item["at"]
+            if item.get("timezone"):
+                existing["timezone"] = item["timezone"]
+            existing.setdefault("max_retries", item["max_retries"])
+            existing.setdefault("retry_delay_seconds", item["retry_delay_seconds"])
+
+    def _register_system_jobs(self) -> None:
+        if self._scheduler is None:
+            return
+        self._scheduler.add_job(
+            func=self._run_system_reminder_processor,
+            trigger=IntervalTrigger(minutes=1, timezone=self._system_timezone()),
+            id="system:reminder_processor",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=60,
+        )
+        self._scheduler.add_job(
+            func=self._run_follow_up_logic,
+            trigger=IntervalTrigger(minutes=30, timezone=self._system_timezone()),
+            id="system:follow_up_logic",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=120,
+        )
+
+    def _sync_all_task_jobs(self) -> None:
+        if self._scheduler is None:
+            return
         for task in self.tasks:
-            if str(task.get("name", "")).strip() == "memory_reflection":
-                task["enabled"] = True
-                if str(task.get("interval", "")).strip().lower() != "hourly":
-                    task["interval"] = "hourly"
-                task.setdefault("max_retries", 2)
-                task.setdefault("retry_delay_seconds", 30)
-                break
-        else:
-            self.tasks.append(reflection_required)
+            self._upsert_task_job(task)
+        self._publish_scheduler_state()
 
-        for task in self.tasks:
-            if str(task.get("name", "")).strip() == "weekly_self_optimization":
-                task["enabled"] = True
-                if str(task.get("interval", "")).strip().lower() != "weekly":
-                    task["interval"] = "weekly"
-                task.setdefault("at", "18:00")
-                task.setdefault("timezone", os.getenv("TZ", "UTC"))
-                task.setdefault("max_retries", 1)
-                task.setdefault("retry_delay_seconds", 60)
-                break
-        else:
-            self.tasks.append(self_opt_required)
-
-    def _normalize_task(self, task: Any) -> dict[str, Any] | None:
-        if not isinstance(task, dict):
-            logger.warning("Skipping invalid scheduler task entry: expected object")
-            return None
-
+    def _upsert_task_job(self, task: dict[str, Any]) -> None:
+        if self._scheduler is None:
+            return
         name = str(task.get("name", "")).strip()
-        interval = str(task.get("interval", "")).strip().lower()
-        task_type = str(task.get("type", "custom")).strip().lower() or "custom"
-
         if not name:
-            logger.warning("Skipping scheduler task with missing name")
-            return None
-        if not self.is_valid_interval(interval):
-            logger.warning("Skipping scheduler task '%s': invalid interval '%s'", name, interval)
-            return None
+            return
+        job_id = f"task:{name}"
+        if not bool(task.get("enabled", True)):
+            try:
+                self._scheduler.remove_job(job_id)
+            except Exception:  # noqa: BLE001
+                pass
+            return
 
-        normalized = dict(task)
-        normalized["name"] = name
-        normalized["interval"] = interval
-        normalized["type"] = task_type
-        normalized["enabled"] = bool(task.get("enabled", True))
-        normalized["one_time"] = bool(task.get("one_time", interval == "once"))
-        normalized.setdefault("max_retries", 2)
-        normalized.setdefault("retry_delay_seconds", 30)
-        if task_type == "reminder":
-            normalized["chat_id"] = self._coerce_chat_id(task.get("chat_id"))
-            normalized["status"] = str(task.get("status", "PENDING")).strip().upper() or "PENDING"
-            if normalized["status"] not in {"PENDING", "RETRY", "SENT", "FAILED"}:
-                normalized["status"] = "PENDING"
-            normalized["retry_count"] = max(0, int(task.get("retry_count", 0) or 0))
-            normalized["max_retries"] = max(1, int(task.get("max_retries", 3) or 3))
-            normalized["last_error"] = str(task.get("last_error", "") or "")
-            if not normalized["chat_id"]:
-                logger.warning("Reminder task '%s' missing chat_id; it will be marked FAILED at runtime", name)
+        trigger = self._build_trigger(task)
+        if trigger is None:
+            logger.warning("scheduler_invalid_trigger", extra={"event": "scheduler_invalid_trigger", "task": name})
+            return
 
-        run_at_value = str(task.get("run_at", "")).strip()
-        if run_at_value:
-            parsed_run_at = self._parse_iso_timestamp(run_at_value)
-            if parsed_run_at is None:
-                logger.warning("Task '%s' has invalid run_at '%s' (expected ISO8601)", name, run_at_value)
-                normalized.pop("run_at", None)
-            else:
-                normalized["run_at"] = parsed_run_at.isoformat()
-
-        at_value = str(task.get("at", "")).strip()
-        if at_value and not self._is_valid_clock_time(at_value):
-            logger.warning("Task '%s' has invalid 'at' format '%s' (expected HH:MM)", name, at_value)
-            normalized.pop("at", None)
-
-        tz_name = str(task.get("timezone", os.getenv("TZ", "UTC"))).strip() or "UTC"
-        try:
-            ZoneInfo(tz_name)
-            normalized["timezone"] = tz_name
-        except Exception:  # noqa: BLE001
-            logger.warning("Task '%s' timezone '%s' invalid, using UTC", name, tz_name)
-            normalized["timezone"] = "UTC"
-
-        weekdays = task.get("weekdays")
-        if weekdays is not None:
-            normalized_weekdays = self._normalize_weekdays(weekdays)
-            if normalized_weekdays:
-                normalized["weekdays"] = normalized_weekdays
-            else:
-                normalized.pop("weekdays", None)
-
-        return normalized
+        self._scheduler.add_job(
+            func=self._run_task_job,
+            trigger=trigger,
+            id=job_id,
+            replace_existing=True,
+            kwargs={"task_name": name},
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=120,
+        )
 
     @staticmethod
     def is_valid_interval(interval: str) -> bool:
-        """Validate supported interval formats."""
-        if interval in {"hourly", "daily", "weekly", "once"}:
+        value = str(interval or "").strip().lower()
+        if value in {"once", "hourly", "daily", "weekly"}:
             return True
-        if interval.startswith("every_"):
-            parts = interval.split("_")
-            if len(parts) != 3 or not parts[1].isdigit():
-                return False
-            return parts[2] in {"minutes", "hours", "days"}
+        if value.startswith("every_"):
+            parts = value.split("_")
+            return len(parts) == 3 and parts[1].isdigit() and parts[2] in {"minutes", "hours", "days"}
         return False
 
     @staticmethod
-    def _is_valid_clock_time(value: str) -> bool:
-        parts = value.split(":")
-        if len(parts) != 2:
-            return False
-        if not parts[0].isdigit() or not parts[1].isdigit():
-            return False
-        hour, minute = int(parts[0]), int(parts[1])
-        return 0 <= hour <= 23 and 0 <= minute <= 59
+    def _parse_clock(at_value: str) -> tuple[int, int] | None:
+        match = re.match(r"^(\d{2}):(\d{2})$", str(at_value).strip())
+        if not match:
+            return None
+        hour, minute = int(match.group(1)), int(match.group(2))
+        if 0 <= hour <= 23 and 0 <= minute <= 59:
+            return hour, minute
+        return None
 
-    @staticmethod
-    def _normalize_weekdays(weekdays: Any) -> list[int]:
-        return normalize_weekdays_input(weekdays)
-
-    def _serializable_tasks(self) -> list[dict[str, Any]]:
-        """Return task list safe for config persistence."""
-        serializable: list[dict[str, Any]] = []
-        for task in self.tasks:
-            serializable.append({k: v for k, v in task.items() if not str(k).startswith("_")})
-        return serializable
-
-    def persist_tasks(self) -> tuple[bool, str]:
-        """Persist scheduler tasks back to scheduler.yaml."""
-        path = self._config_path or resolve_config_file("scheduler.yaml")
+    def _build_trigger(self, task: dict[str, Any]) -> Any | None:
+        interval = str(task.get("interval", "")).strip().lower()
+        timezone_name = str(task.get("timezone", self._system_timezone())).strip() or self._system_timezone()
         try:
-            payload = {"tasks": self._serializable_tasks()}
-            path.parent.mkdir(parents=True, exist_ok=True)
-            with path.open("w", encoding="utf-8") as handle:
-                yaml.safe_dump(payload, handle, sort_keys=False)
-            self._config_path = path
-            self._publish_scheduler_state()
-            return True, f"saved to {path}"
-        except Exception as exc:  # noqa: BLE001
-            logger.error("Failed to persist scheduler tasks to %s: %s", path, exc)
-            ok, detail = self._persist_tasks_override_to_redis()
-            if ok:
-                logger.warning(
-                    "Scheduler config write failed at %s; persisted task set to Redis fallback. reason=%s",
-                    path,
-                    exc,
-                )
-                return True, f"saved to Redis fallback ({detail}); config write failed: {exc}"
-            if "Permission denied" in str(exc):
-                logger.warning(
-                    "Scheduler config path is not writable (%s). "
-                    "Set HER_CONFIG_DIR to writable path or use writable /app/config mount.",
-                    path,
-                )
-            return False, f"failed to write {path} and Redis fallback: {exc}"
-
-    def _load_tasks_override_from_redis(self) -> list[dict[str, Any]]:
-        client = self._redis_client()
-        if client is None:
-            return []
-        try:
-            raw = client.get("her:scheduler:tasks_override")
-            if not raw:
-                return []
-            payload = json.loads(raw)
-            raw_tasks = payload.get("tasks", []) if isinstance(payload, dict) else []
-            loaded: list[dict[str, Any]] = []
-            for raw_task in raw_tasks:
-                normalized = self._normalize_task(raw_task)
-                if normalized is not None:
-                    loaded.append(normalized)
-            if loaded:
-                logger.info("Loaded %s scheduler tasks from Redis override", len(loaded))
-            return loaded
+            ZoneInfo(timezone_name)
         except Exception:  # noqa: BLE001
-            return []
+            timezone_name = "UTC"
 
-    def _persist_tasks_override_to_redis(self) -> tuple[bool, str]:
-        client = self._redis_client()
-        if client is None:
-            return False, "redis unavailable"
-        try:
-            payload = {
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "tasks": self._serializable_tasks(),
-            }
-            client.set("her:scheduler:tasks_override", json.dumps(payload))
-            return True, "her:scheduler:tasks_override"
-        except Exception as exc:  # noqa: BLE001
-            return False, str(exc)
+        if interval == "once":
+            run_at = self._parse_iso_timestamp(task.get("run_at"))
+            if run_at is None:
+                return None
+            return DateTrigger(run_date=run_at)
+        if interval == "hourly":
+            return IntervalTrigger(hours=1, timezone=timezone_name)
+        if interval.startswith("every_"):
+            _, count_text, unit = interval.split("_", 2)
+            count = max(1, int(count_text))
+            if unit == "minutes":
+                return IntervalTrigger(minutes=count, timezone=timezone_name)
+            if unit == "hours":
+                return IntervalTrigger(hours=count, timezone=timezone_name)
+            if unit == "days":
+                return IntervalTrigger(days=count, timezone=timezone_name)
+            return None
 
-    async def _scheduler_loop(self):
-        """Main scheduler loop."""
-        while self.running:
-            try:
-                now = datetime.now(timezone.utc)
-                dirty = False
-                for task in self.tasks:
-                    if not task.get("enabled", True):
-                        continue
-                    if str(task.get("type", "")).lower() == "reminder":
-                        reminder_status = str(task.get("status", "PENDING")).upper()
-                        if reminder_status in _TERMINAL_REMINDER_STATES and bool(task.get("one_time", False)):
-                            continue
-                        if reminder_status not in _ACTIVE_REMINDER_STATES and not bool(task.get("one_time", False)):
-                            task["status"] = "PENDING"
-
-                    if self._should_run(now, task):
-                        success = await self._execute_task(task)
-                        if success or not bool(task.get("retry_on_failure", True)):
-                            task["_last_run"] = now.isoformat()
-                        dirty = True
-
-                    next_run = self._compute_next_run(now, task)
-                    if next_run:
-                        serialized = next_run.isoformat()
-                        if task.get("_next_run") != serialized:
-                            task["_next_run"] = serialized
-                            dirty = True
-                    elif task.get("_next_run"):
-                        task.pop("_next_run", None)
-                        dirty = True
-
-                if dirty:
-                    self._persist_runtime_state()
-                    self._publish_scheduler_state()
-
-                # Check every minute
-                await asyncio.sleep(60)
-
-            except asyncio.CancelledError:
-                break
-            except Exception as exc:  # noqa: BLE001
-                logger.exception("Error in scheduler loop: %s", exc)
-                await asyncio.sleep(60)
+        at_parsed = self._parse_clock(str(task.get("at", "")))
+        weekdays = normalize_weekdays_input(task.get("weekdays"))
+        if interval == "daily":
+            if at_parsed is None:
+                return IntervalTrigger(days=1, timezone=timezone_name)
+            hour, minute = at_parsed
+            day_of_week = ",".join(str(item) for item in weekdays) if weekdays else "*"
+            return CronTrigger(day_of_week=day_of_week, hour=hour, minute=minute, timezone=timezone_name)
+        if interval == "weekly":
+            if at_parsed is None:
+                at_parsed = (9, 0)
+            hour, minute = at_parsed
+            if not weekdays:
+                weekdays = [0]
+            day_of_week = ",".join(str(item) for item in weekdays)
+            return CronTrigger(day_of_week=day_of_week, hour=hour, minute=minute, timezone=timezone_name)
+        return None
 
     @staticmethod
     def _parse_iso_timestamp(value: Any) -> datetime | None:
         if not value:
             return None
         try:
-            dt = datetime.fromisoformat(str(value))
+            raw = str(value)
+            dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
             if dt.tzinfo is None:
                 dt = dt.replace(tzinfo=timezone.utc)
             return dt.astimezone(timezone.utc)
-        except (ValueError, TypeError):
+        except Exception:  # noqa: BLE001
             return None
 
-    @staticmethod
-    def _parse_interval_delta(interval: str) -> timedelta | None:
-        if interval == "hourly":
-            return timedelta(hours=1)
-        if interval == "daily":
-            return timedelta(days=1)
-        if interval == "weekly":
-            return timedelta(weeks=1)
-        if interval.startswith("every_"):
-            parts = interval.split("_")
-            if len(parts) == 3 and parts[1].isdigit():
-                value = int(parts[1])
-                unit = parts[2]
-                if unit == "minutes":
-                    return timedelta(minutes=value)
-                if unit == "hours":
-                    return timedelta(hours=value)
-                if unit == "days":
-                    return timedelta(days=value)
+    def _find_task(self, task_name: str) -> dict[str, Any] | None:
+        for task in self.tasks:
+            if str(task.get("name", "")).strip() == task_name:
+                return task
         return None
 
-    @staticmethod
-    def _parse_clock_time(value: str) -> tuple[int, int] | None:
-        if not TaskScheduler._is_valid_clock_time(value):
-            return None
-        hour_s, minute_s = value.split(":", 1)
-        return int(hour_s), int(minute_s)
-
-    def _compute_next_time_based_run(
-        self,
-        now_utc: datetime,
-        task: dict[str, Any],
-        interval: str,
-        last_run_dt: datetime | None,
-    ) -> datetime | None:
-        at_value = str(task.get("at", "")).strip()
-        parsed_clock = self._parse_clock_time(at_value)
-        if parsed_clock is None:
-            return None
-
-        tz_name = str(task.get("timezone", os.getenv("TZ", "UTC"))).strip() or "UTC"
-        tz = ZoneInfo(tz_name)
-        local_now = now_utc.astimezone(tz)
-        hour, minute = parsed_clock
-        candidate_local = local_now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-
-        weekdays = self._normalize_weekdays(task.get("weekdays", []))
-
-        if interval == "daily":
-            if candidate_local <= local_now:
-                candidate_local += timedelta(days=1)
-            if weekdays:
-                while candidate_local.weekday() not in weekdays:
-                    candidate_local += timedelta(days=1)
-            return candidate_local.astimezone(timezone.utc)
-
-        if interval == "weekly":
-            if weekdays:
-                if candidate_local <= local_now:
-                    candidate_local += timedelta(days=1)
-                while candidate_local.weekday() not in weekdays:
-                    candidate_local += timedelta(days=1)
-                return candidate_local.astimezone(timezone.utc)
-
-            anchor_weekday = local_now.weekday()
-            if last_run_dt is not None:
-                anchor_weekday = last_run_dt.astimezone(tz).weekday()
-
-            # Align candidate with chosen weekday, then ensure it's in the future.
-            day_shift = (anchor_weekday - candidate_local.weekday()) % 7
-            candidate_local += timedelta(days=day_shift)
-            if candidate_local <= local_now:
-                candidate_local += timedelta(days=7)
-            return candidate_local.astimezone(timezone.utc)
-
-        return None
-
-    def _compute_next_run(self, now_utc: datetime, task: dict[str, Any]) -> datetime | None:
-        if str(task.get("type", "")).lower() == "reminder":
-            reminder_status = str(task.get("status", "PENDING")).upper()
-            if reminder_status == "RETRY":
-                retry_next = self._parse_iso_timestamp(task.get("_next_run"))
-                if retry_next is not None:
-                    return retry_next
-            if reminder_status in _TERMINAL_REMINDER_STATES and bool(task.get("one_time", False)):
-                return None
-
-        interval = str(task.get("interval", ""))
-        last_run_dt = self._parse_iso_timestamp(task.get("_last_run"))
-        run_at_dt = self._parse_iso_timestamp(task.get("run_at"))
-
-        if run_at_dt is not None:
-            if last_run_dt is not None and last_run_dt >= run_at_dt:
-                return None
-            return run_at_dt
-
-        if interval == "once":
-            return None
-
-        time_based_next = self._compute_next_time_based_run(now_utc, task, interval, last_run_dt)
-        if time_based_next is not None:
-            return time_based_next
-
-        delta = self._parse_interval_delta(interval)
-        if delta is None:
-            return None
-
-        if last_run_dt is None:
-            return now_utc
-        return last_run_dt + delta
-
-    def _should_run(self, now_utc: datetime, task: dict[str, Any]) -> bool:
-        next_run_dt = self._parse_iso_timestamp(task.get("_next_run"))
-        if next_run_dt is None:
-            next_run_dt = self._compute_next_run(now_utc, task)
-            if next_run_dt is not None:
-                task["_next_run"] = next_run_dt.isoformat()
-
-        if next_run_dt is None:
-            return False
-
-        return now_utc >= next_run_dt
-
-    async def _execute_task(self, task: dict[str, Any]) -> bool:
-        """Execute a scheduled task."""
-        task_name = task.get("name", "unknown")
-        task_type = task.get("type", "custom")
-        if str(task_type).lower() == "reminder":
-            return await self._execute_reminder_state_machine(task)
-        max_retries = max(0, int(task.get("max_retries", 2) or 0))
-        retry_delay = max(1, int(task.get("retry_delay_seconds", 30) or 30))
-        attempts_total = max_retries + 1
-        attempt = 0
-        success = False
-        result = ""
-        error = ""
-        execution_time = 0.0
-
-        while attempt < attempts_total and not success:
-            attempt += 1
-            start_time = time.time()
-            logger.info(
-                "Executing scheduled task: %s (type: %s, attempt %s/%s)",
-                task_name,
-                task_type,
-                attempt,
-                attempts_total,
+    def _run_task_job(self, task_name: str) -> None:
+        task = self._find_task(task_name)
+        if task is None:
+            return
+        lock_name = f"task:{task_name}"
+        lock = self._acquire_job_lock(lock_name)
+        if lock is None:
+            logger.info("scheduler_task_skipped_locked", extra={"event": "scheduler_task_skipped_locked", "task": task_name})
+            return
+        try:
+            started = time.perf_counter()
+            success, result, error = self._execute_task(task)
+            task["_last_run"] = datetime.now(timezone.utc).isoformat()
+            if bool(task.get("one_time", str(task.get("interval", "")).lower() == "once")) and success:
+                task["enabled"] = False
+                self._upsert_task_job(task)
+            self._log_job_execution(
+                name=task_name,
+                job_type=str(task.get("type", "custom")),
+                success=success,
+                result=result,
+                error=error,
+                execution_time=time.perf_counter() - started,
+                next_run=self._next_run_for_task(task_name),
             )
-            result = ""
-            error = ""
-            try:
-                if task_type == "twitter":
-                    result = await self._execute_twitter_task(task)
-                    success = True
-                elif task_type == "memory_reflection":
-                    await self._execute_reflection_task(task)
-                    success = True
-                    result = "Memory reflection completed"
-                elif task_type == "custom":
-                    await self._execute_custom_task(task)
-                    success = True
-                    result = "Custom task processed"
-                elif task_type == "workflow":
-                    result = await self._execute_workflow_task(task)
-                    success = True
-                elif task_type == "reminder":
-                    result = await self._execute_reminder_task(task)
-                    if result.startswith("Reminder permanent failure"):
-                        error = result
-                        success = False
-                        break
-                    success = result.startswith("Reminder sent")
-                    if not success:
-                        error = result
-                elif task_type == "self_optimization":
-                    result = await self._execute_self_optimization_task(task)
-                    success = True
-                else:
-                    error = f"Unknown task type: {task_type}"
-                    logger.warning(error)
-            except Exception as exc:  # noqa: BLE001
-                error = str(exc)
-                logger.exception("Task execution failed: %s", exc)
-            execution_time = time.time() - start_time
-            if not success and attempt < attempts_total:
-                await asyncio.sleep(retry_delay)
+            self._publish_scheduler_state()
+        finally:
+            self._release_job_lock(lock)
 
-        next_run = task.get("_next_run", "")
-        self._log_job_execution(task_name, task_type, success, result, error, execution_time, str(next_run))
-        self._decision_logger.log(
-            event_type="scheduler_execution",
-            summary=f"Task '{task_name}' executed ({'success' if success else 'failed'})",
-            source="scheduler",
-            details={
-                "task": task_name,
-                "type": task_type,
-                "success": success,
-                "error": error,
-                "next_run": str(next_run),
-                "attempts": attempt,
-            },
-        )
-        if success and bool(task.get("one_time", False)):
-            task["enabled"] = False
-            task.pop("_next_run", None)
-        return success
+    def _run_system_reminder_processor(self) -> None:
+        lock = self._acquire_job_lock("system:reminder_processor")
+        if lock is None:
+            return
+        try:
+            now = datetime.now(timezone.utc).isoformat()
+            self._decision_logger.log(
+                event_type="scheduler_system_job",
+                summary="Reminder processor heartbeat",
+                source="scheduler",
+                details={"job": "reminder_processor", "timestamp": now},
+            )
+        finally:
+            self._release_job_lock(lock)
 
-    async def _execute_reminder_state_machine(self, task: dict[str, Any]) -> bool:
-        task_name = str(task.get("name", "unknown"))
-        old_status = str(task.get("status", "PENDING")).upper()
-        retry_count = max(0, int(task.get("retry_count", 0) or 0))
-        max_retries = max(1, int(task.get("max_retries", 3) or 3))
-        result = ""
-        error = ""
-        execution_time = 0.0
+    def _run_follow_up_logic(self) -> None:
+        lock = self._acquire_job_lock("system:follow_up_logic")
+        if lock is None:
+            return
+        try:
+            now = datetime.now(timezone.utc)
+            for profile in self._active_user_profiles(limit=500):
+                if profile.proactive_opt_out:
+                    continue
+                if not profile.chat_id:
+                    continue
+                if self._has_recent_proactive_send(profile.user_id, within_hours=18):
+                    continue
+                last_touch = self._last_user_context_timestamp(profile.user_id)
+                if last_touch is None:
+                    continue
+                if now - last_touch < timedelta(hours=18):
+                    continue
+                mood = self._resolve_daily_mood(now.date())
+                message = self._proactive_message_for_user(profile.user_id, mood, kind="follow_up")
+                self._send_telegram_notification(profile.chat_id, message)
+        finally:
+            self._release_job_lock(lock)
 
-        if old_status not in _ACTIVE_REMINDER_STATES:
-            return old_status == "SENT"
+    def _has_recent_proactive_send(self, user_id: str, within_hours: int = 24) -> bool:
+        connection = None
+        try:
+            import psycopg2
+
+            connection = psycopg2.connect(
+                dbname=os.getenv("POSTGRES_DB", "her_memory"),
+                user=os.getenv("POSTGRES_USER", "her"),
+                password=os.getenv("POSTGRES_PASSWORD", ""),
+                host=os.getenv("POSTGRES_HOST", "postgres"),
+                port=int(os.getenv("POSTGRES_PORT", "5432")),
+            )
+            with connection, connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT 1
+                    FROM proactive_message_audit
+                    WHERE user_id = %s
+                      AND success = TRUE
+                      AND sent_at >= NOW() - (%s::text || ' hours')::interval
+                    LIMIT 1
+                    """,
+                    (str(user_id), max(1, int(within_hours))),
+                )
+                return cursor.fetchone() is not None
+        except Exception:  # noqa: BLE001
+            return False
+        finally:
+            if connection is not None:
+                connection.close()
+
+    def _execute_task(self, task: dict[str, Any]) -> tuple[bool, str, str]:
+        task_type = str(task.get("type", "custom")).strip().lower()
+        if task_type == "reminder":
+            return self._execute_reminder_task(task)
+        if task_type == "workflow":
+            return self._execute_workflow_task(task)
+        if task_type == "self_optimization":
+            return self._execute_self_optimization_task(task)
+        if task_type == "memory_reflection":
+            return True, "memory_reflection_completed", ""
+        if task_type == "proactive_daily_dispatcher":
+            return self._execute_proactive_dispatcher(task)
+        if task_type == "proactive_message":
+            return self._execute_proactive_message_task(task)
+        return True, "custom_task_processed", ""
+
+    def _execute_reminder_task(self, task: dict[str, Any]) -> tuple[bool, str, str]:
+        status = str(task.get("status", "PENDING")).upper()
+        if status in _TERMINAL_REMINDER_STATES and bool(task.get("one_time", False)):
+            return True, "already_terminal", ""
 
         chat_id = self._resolve_reminder_chat_id(task)
         if chat_id is None:
             task["status"] = "FAILED"
             task["last_error"] = "chat_id missing or invalid"
-            self._log_reminder_state_change(task, old_status, "FAILED")
-            self._log_job_execution(task_name, "reminder", False, "", "chat_id missing or invalid", 0.0, str(task.get("_next_run", "")))
-            return False
+            return False, "", "chat_id missing or invalid"
 
-        triggered_at_utc = datetime.now(timezone.utc)
-        user_timezone = str(task.get("user_timezone", task.get("timezone", os.getenv("USER_TIMEZONE", "UTC")))).strip() or "UTC"
-        reminder_text = self._render_reminder_text_with_local_time(
-            text=str(task.get("message", "Reminder")),
-            triggered_at_utc=triggered_at_utc,
-            timezone_name=user_timezone,
-        )
-
-        start_time = time.time()
-        sent, failure_reason = await self._send_telegram_notification(chat_id, reminder_text)
-        execution_time = time.time() - start_time
-
+        user_timezone = str(task.get("user_timezone", task.get("timezone", "UTC"))).strip() or "UTC"
+        now_utc = datetime.now(timezone.utc)
+        message = self._render_reminder_text_with_local_time(str(task.get("message", "Reminder")), now_utc, user_timezone)
+        sent, reason = self._send_telegram_notification(chat_id, message)
         if sent:
-            task["retry_count"] = 0
-            task["last_error"] = ""
             task["status"] = "SENT"
-            result = f"Reminder sent to chat_id={chat_id}"
-            self._log_reminder_state_change(task, old_status, "SENT")
-            self._log_job_execution(task_name, "reminder", True, result, "", execution_time, str(task.get("_next_run", "")))
-            if bool(task.get("one_time", False)):
-                task["enabled"] = False
-                task.pop("_next_run", None)
-            else:
+            task["last_error"] = ""
+            task["retry_count"] = 0
+            if not bool(task.get("one_time", False)):
                 task["status"] = "PENDING"
-                self._log_reminder_state_change(task, "SENT", "PENDING")
-            return True
+            return True, f"reminder_sent_chat_{chat_id}", ""
 
-        retry_count += 1
+        retry_count = max(0, int(task.get("retry_count", 0))) + 1
         task["retry_count"] = retry_count
-        task["last_error"] = str(failure_reason or "transient_error")
-        permanent = bool(failure_reason in {"chat_not_found", "forbidden", "chat_missing"})
-
-        if permanent or retry_count >= max_retries:
+        task["last_error"] = reason or "transient_error"
+        max_retries = max(1, int(task.get("max_retries", 3) or 3))
+        if reason in {"chat_not_found", "forbidden", "chat_missing"} or retry_count >= max_retries:
             task["status"] = "FAILED"
-            error = f"Reminder permanent failure for chat_id={chat_id}: {failure_reason}"
-            self._log_reminder_state_change(task, old_status, "FAILED")
-            self._log_job_execution(task_name, "reminder", False, "", error, execution_time, str(task.get("_next_run", "")))
-            if bool(task.get("one_time", False)):
-                task["enabled"] = False
-                task.pop("_next_run", None)
-            return False
-
-        backoff_seconds = 10 * (3 ** max(0, retry_count - 1))
+            return False, "", f"reminder_failed:{reason}"
         task["status"] = "RETRY"
-        task["_next_run"] = (triggered_at_utc + timedelta(seconds=backoff_seconds)).isoformat()
-        error = f"Reminder transient failure for chat_id={chat_id}: {failure_reason}; retry in {backoff_seconds}s"
-        self._log_reminder_state_change(task, old_status, "RETRY")
-        self._log_job_execution(task_name, "reminder", False, "", error, execution_time, str(task.get("_next_run", "")))
-        return False
+        return False, "", f"reminder_retry:{reason}"
 
-    def _log_job_execution(
-        self,
-        name: str,
-        job_type: str,
-        success: bool,
-        result: str,
-        error: str,
-        execution_time: float,
-        next_run: str,
-    ):
-        """Log job execution to Redis."""
-        try:
-            import redis
+    def _execute_workflow_task(self, task: dict[str, Any]) -> tuple[bool, str, str]:
+        steps = task.get("steps", [])
+        if not isinstance(steps, list) or not steps:
+            return True, "workflow_skipped_no_steps", ""
+        outputs: list[str] = []
+        context: dict[str, Any] = {
+            "task_name": str(task.get("name", "unknown")),
+            "task": task,
+            "state": task.setdefault("_state", {}),
+            "now_utc": datetime.now(timezone.utc).isoformat(),
+        }
+        for step in steps:
+            if not isinstance(step, dict):
+                continue
+            action = str(step.get("action", "")).strip().lower()
+            if action == "log":
+                outputs.append(str(step.get("message", "")))
+            elif action == "notify":
+                notify_user_id = self._resolve_notify_user_id(task)
+                if notify_user_id is None:
+                    continue
+                sent, reason = self._send_telegram_notification(notify_user_id, str(step.get("message", "Task triggered")))
+                outputs.append("notify_sent" if sent else f"notify_failed:{reason}")
+            elif action == "set_state":
+                key = str(step.get("key", "")).strip()
+                if key:
+                    context["state"][key] = step.get("value")
+                    outputs.append(f"set_state:{key}")
+            elif action == "set":
+                key = str(step.get("key", "")).strip()
+                if key:
+                    context[key] = step.get("value")
+                    outputs.append(f"set:{key}")
+        return True, "; ".join(outputs) if outputs else "workflow_completed", ""
 
-            redis_host = os.getenv("REDIS_HOST", "redis")
-            redis_port = int(os.getenv("REDIS_PORT", "6379"))
-            redis_password = os.getenv("REDIS_PASSWORD", "")
-
-            redis_client = redis.Redis(
-                host=redis_host,
-                port=redis_port,
-                password=redis_password,
-                decode_responses=True,
-            )
-
-            now = datetime.now(timezone.utc)
-            payload = {
-                "timestamp": now.isoformat(),
-                "name": name,
-                "type": job_type,
-                "success": success,
-                "result": result,
-                "error": error,
-                "execution_time": execution_time,
-                "next_run": next_run,
-            }
-
-            redis_client.lpush("her:scheduler:jobs", json.dumps(payload))
-            redis_client.ltrim("her:scheduler:jobs", 0, 99)
-        except Exception:  # noqa: BLE001
-            logger.warning("Failed to log scheduled job execution to Redis")
-
-    async def _execute_twitter_task(self, task: dict[str, Any]):
-        """Execute Twitter scheduled task."""
-        try:
-            from her_mcp.twitter_tools import TwitterConfigTool
-
-            twitter_config = TwitterConfigTool()
-            result = twitter_config._run(action="execute")
-            logger.info("Twitter task result: %s", result)
-            return str(result)
-
-        except Exception as exc:  # noqa: BLE001
-            logger.error("Twitter task failed: %s", exc)
-            return f"Twitter task failed: {exc}"
-
-    async def _execute_reflection_task(self, task: dict[str, Any]):
-        """Execute memory reflection task."""
-        logger.info("Memory reflection task executed")
-
-    async def _execute_custom_task(self, task: dict[str, Any]):
-        """Execute custom task."""
-        command = task.get("command")
-        if command:
-            logger.info("Executing custom command: %s", command)
-
-    async def _execute_reminder_task(self, task: dict[str, Any]) -> str:
-        # Kept for backward compatibility with older call sites.
-        chat_id = self._resolve_reminder_chat_id(task)
-        if chat_id is None:
-            return "Reminder permanent failure: chat_id missing or invalid"
-        message = str(task.get("message", "Reminder"))
-        sent, failure_reason = await self._send_telegram_notification(chat_id, message)
-        if sent:
-            return f"Reminder sent to {chat_id}"
-        if failure_reason in {"chat_not_found", "forbidden"}:
-            return f"Reminder permanent failure for {chat_id}: {failure_reason}"
-        return f"Reminder failed for {chat_id}"
-
-    async def _execute_self_optimization_task(self, task: dict[str, Any]) -> str:
+    def _execute_self_optimization_task(self, task: dict[str, Any]) -> tuple[bool, str, str]:
         summary = self._reinforcement.summarize_recent_patterns(window=500)
         avg_score = float(summary.get("avg_score", 0.0) or 0.0)
-        weak_areas = list(summary.get("weak_areas", []))
-        strong_areas = list(summary.get("strong_areas", []))
-
-        personality_notes: list[str] = []
+        notes: list[str] = []
         try:
             agents_path = resolve_config_file("agents.yaml")
             personality_path = resolve_config_file("personality.yaml")
             personality = PersonalityAgent(agents_path, personality_path)
-
             if avg_score < -0.2:
                 personality.adjust_trait("system", "warmth", 1)
                 personality.adjust_trait("system", "assertiveness", -1)
-                personality_notes.append("Adjusted personality: warmth +1, assertiveness -1")
+                notes.append("warmth_plus_assertiveness_minus")
             elif avg_score > 0.4:
                 personality.adjust_trait("system", "curiosity", 1)
-                personality_notes.append("Adjusted personality: curiosity +1")
-            else:
-                personality_notes.append("No personality adjustment needed this cycle")
+                notes.append("curiosity_plus")
         except Exception as exc:  # noqa: BLE001
-            personality_notes.append(f"Personality adjustment skipped: {exc}")
-
-        if weak_areas:
-            learning_task_name = "self_learning_focus"
-            existing = {str(t.get("name", "")) for t in self.tasks}
-            message = (
-                "Self-learning focus for this week: "
-                + ", ".join(weak_areas[:3])
-                + ". Prioritize stronger clarity, empathy, and actionable guidance."
-            )
-            if learning_task_name in existing:
-                for scheduled in self.tasks:
-                    if str(scheduled.get("name", "")) == learning_task_name:
-                        scheduled["message"] = message
-                        scheduled["enabled"] = True
-                        break
-            else:
-                notify_user_id = self._resolve_notify_user_id(task)
-                if notify_user_id is None:
-                    admin_id = str(os.getenv("ADMIN_USER_ID", "")).strip()
-                    notify_user_id = int(admin_id) if admin_id.isdigit() else None
-                self.add_task(
-                    name=learning_task_name,
-                    interval="every_2_days",
-                    task_type="reminder",
-                    enabled=True,
-                    message=message,
-                    notify_user_id=notify_user_id,
-                    max_retries=1,
-                    retry_delay_seconds=60,
-                )
-            self.persist_tasks()
-
+            notes.append(f"personality_adjustment_skipped:{exc}")
         self._decision_logger.log(
             event_type="weekly_self_optimization",
             summary="Completed weekly self-optimization cycle",
             source="scheduler",
             details={
-                "interaction_count": int(summary.get("count", 0) or 0),
                 "avg_score": avg_score,
-                "weak_areas": weak_areas,
-                "strong_areas": strong_areas,
-                "personality_notes": personality_notes,
+                "strong_areas": list(summary.get("strong_areas", [])),
+                "weak_areas": list(summary.get("weak_areas", [])),
+                "notes": notes,
             },
         )
-        return (
-            "Weekly self-optimization complete. "
-            f"avg_score={avg_score}, weak_areas={weak_areas[:3]}, strong_areas={strong_areas[:3]}"
-        )
+        return True, f"self_optimization_avg={avg_score}", ""
 
-    async def _send_telegram_notification(self, chat_id: int, text: str) -> tuple[bool, str | None]:
-        """Send scheduler notifications via Telegram Bot API."""
+    def _execute_proactive_dispatcher(self, task: dict[str, Any]) -> tuple[bool, str, str]:
+        del task
+        today = datetime.now(timezone.utc).date()
+        created = 0
+        for profile in self._active_user_profiles(limit=1000):
+            if profile.proactive_opt_out:
+                continue
+            if not profile.chat_id:
+                continue
+            frequency = (profile.interaction_frequency or "normal").strip().lower()
+            max_daily = 1 if frequency in {"low", "rare"} else (3 if frequency in {"high", "frequent"} else 2)
+            num_messages = random.randint(1, min(3, max_daily))
+            day_tz = profile.timezone or "UTC"
+            if self._count_scheduled_proactive(profile.user_id, today) >= max_daily:
+                continue
+            for run_at in self._random_daily_times(today, day_tz, num_messages):
+                message_kind = random.choice(["checkin", "follow_up", "fact", "support", "curiosity", "joke", "reflection"])
+                proactive_task = {
+                    "name": f"proactive_{profile.user_id}_{int(run_at.timestamp())}",
+                    "type": "proactive_message",
+                    "interval": "once",
+                    "one_time": True,
+                    "enabled": True,
+                    "run_at": run_at.isoformat(),
+                    "timezone": day_tz,
+                    "user_timezone": day_tz,
+                    "chat_id": profile.chat_id,
+                    "notify_user_id": int(profile.user_id) if str(profile.user_id).isdigit() else profile.telegram_user_id,
+                    "language": profile.preferred_language,
+                    "message_kind": message_kind,
+                    "max_retries": 1,
+                    "retry_delay_seconds": 30,
+                }
+                self.tasks.append(proactive_task)
+                self._upsert_task_job(proactive_task)
+                created += 1
+        return True, f"proactive_messages_scheduled={created}", ""
+
+    def _count_scheduled_proactive(self, user_id: str, day_utc: date) -> int:
+        count = 0
+        for task in self.tasks:
+            if str(task.get("type", "")) != "proactive_message":
+                continue
+            if str(task.get("notify_user_id", "")) != str(user_id):
+                continue
+            run_at = self._parse_iso_timestamp(task.get("run_at"))
+            if run_at is None:
+                continue
+            if run_at.date() == day_utc:
+                count += 1
+        return count
+
+    def _execute_proactive_message_task(self, task: dict[str, Any]) -> tuple[bool, str, str]:
+        chat_id = self._resolve_reminder_chat_id(task)
+        if chat_id is None:
+            return False, "", "chat_id missing for proactive message"
+        user_id = str(task.get("notify_user_id", "")).strip() or str(task.get("chat_id", ""))
+        mood = self._resolve_daily_mood(datetime.now(timezone.utc).date())
+        kind = str(task.get("message_kind", "checkin") or "checkin")
+        message = self._proactive_message_for_user(user_id=user_id, mood=mood, kind=kind)
+        sent, reason = self._send_telegram_notification(chat_id, message)
+        self._record_proactive_audit(
+            user_id=user_id,
+            scheduled_at=self._parse_iso_timestamp(task.get("run_at")) or datetime.now(timezone.utc),
+            sent_at=datetime.now(timezone.utc) if sent else None,
+            kind=kind,
+            mood=mood,
+            success=sent,
+            details={"reason": reason or "", "chat_id": chat_id},
+        )
+        if sent:
+            return True, "proactive_sent", ""
+        return False, "", f"proactive_send_failed:{reason}"
+
+    def _record_proactive_audit(
+        self,
+        *,
+        user_id: str,
+        scheduled_at: datetime,
+        sent_at: datetime | None,
+        kind: str,
+        mood: str,
+        success: bool,
+        details: dict[str, Any],
+    ) -> None:
+        connection = None
+        try:
+            import psycopg2
+
+            connection = psycopg2.connect(
+                dbname=os.getenv("POSTGRES_DB", "her_memory"),
+                user=os.getenv("POSTGRES_USER", "her"),
+                password=os.getenv("POSTGRES_PASSWORD", ""),
+                host=os.getenv("POSTGRES_HOST", "postgres"),
+                port=int(os.getenv("POSTGRES_PORT", "5432")),
+            )
+            with connection, connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    INSERT INTO proactive_message_audit (
+                        user_id, scheduled_at, sent_at, message_kind, mood, success, details
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb)
+                    """,
+                    (
+                        user_id,
+                        scheduled_at,
+                        sent_at,
+                        kind,
+                        mood,
+                        bool(success),
+                        json.dumps(details),
+                    ),
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("proactive_audit_write_failed: %s", exc)
+        finally:
+            if connection is not None:
+                connection.close()
+
+    def _active_user_profiles(self, limit: int = 200) -> list[Any]:
+        connection = None
+        profiles: list[Any] = []
+        try:
+            import psycopg2
+
+            connection = psycopg2.connect(
+                dbname=os.getenv("POSTGRES_DB", "her_memory"),
+                user=os.getenv("POSTGRES_USER", "her"),
+                password=os.getenv("POSTGRES_PASSWORD", ""),
+                host=os.getenv("POSTGRES_HOST", "postgres"),
+                port=int(os.getenv("POSTGRES_PORT", "5432")),
+            )
+            with connection, connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT user_id
+                    FROM users
+                    ORDER BY COALESCE(last_interaction, created_at) DESC
+                    LIMIT %s
+                    """,
+                    (max(1, int(limit)),),
+                )
+                rows = cursor.fetchall() or []
+            for row in rows:
+                user_id = str(row[0])
+                profiles.append(self._user_profiles.get_personalization_profile(user_id))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("scheduler_user_profile_query_failed", extra={"event": "scheduler_user_profile_query_failed", "error": str(exc)})
+        finally:
+            if connection is not None:
+                connection.close()
+        return profiles
+
+    @staticmethod
+    def _resolve_daily_mood(target_day: date) -> str:
+        moods = ["curious", "playful", "reflective", "supportive"]
+        return moods[target_day.toordinal() % len(moods)]
+
+    @staticmethod
+    def _random_daily_times(day_utc: date, timezone_name: str, count: int) -> list[datetime]:
+        try:
+            tz = ZoneInfo(timezone_name)
+        except Exception:  # noqa: BLE001
+            tz = ZoneInfo("UTC")
+        times: list[datetime] = []
+        for _ in range(max(1, int(count))):
+            hour = random.randint(9, 20)
+            minute = random.randint(0, 59)
+            local_dt = datetime(day_utc.year, day_utc.month, day_utc.day, hour, minute, tzinfo=tz)
+            times.append(local_dt.astimezone(UTC))
+        return sorted(times)
+
+    def _proactive_message_for_user(self, user_id: str, mood: str, kind: str) -> str:
+        profile = self._user_profiles.get_personalization_profile(user_id)
+        name = profile.nickname or profile.name or "there"
+        language = (profile.preferred_language or "en").strip().lower()
+        memory_hint = self._memory_hint_for_user(user_id)
+
+        english_templates = {
+            "checkin": f"Hi {name}, quick check-in: how is your day going so far?",
+            "follow_up": f"Hi {name}, yesterday you mentioned {memory_hint}. How is it going now?",
+            "fact": f"Hi {name}, curious fact for today: short breaks often improve focus and memory.",
+            "support": f"Hi {name}, if today feels heavy, take one small step and I will help with the next one.",
+            "curiosity": f"Hi {name}, what is one question you want to explore today?",
+            "joke": f"Hi {name}, tiny joke break: why do programmers confuse Halloween and Christmas? Because OCT 31 == DEC 25.",
+            "reflection": f"Hi {name}, reflective moment: what worked well for you today, and what will you improve tomorrow?",
+        }
+        persian_templates = {
+            "checkin": f"{name} عزیز، یک احوال‌پرسی کوتاه: امروزت تا اینجا چطور بوده؟",
+            "follow_up": f"{name} عزیز، دیروز گفتی {memory_hint}. الان اوضاعش چطوره؟",
+            "fact": f"{name} عزیز، یک نکته جالب امروز: استراحت‌های کوتاه معمولاً تمرکز و حافظه را بهتر می‌کنند.",
+            "support": f"{name} عزیز، اگر امروز سنگین است، یک قدم خیلی کوچک بردار؛ من برای قدم بعدی کمکت می‌کنم.",
+            "curiosity": f"{name} عزیز، امروز دوست داری چه سوالی را عمیق‌تر بررسی کنیم؟",
+            "joke": f"{name} عزیز، یک شوخی کوتاه: چرا برنامه‌نویس‌ها هالووین و کریسمس را قاطی می‌کنند؟ چون OCT 31 == DEC 25.",
+            "reflection": f"{name} عزیز، یک لحظه برای بازتاب: امروز چه چیزی خوب پیش رفت و فردا چه چیزی را بهتر می‌کنی؟",
+        }
+        mapping = persian_templates if language == "fa" else english_templates
+        base = mapping.get(kind, mapping["checkin"])
+        if mood == "playful" and language == "en":
+            return base + " Mood today: playful."
+        if mood == "reflective" and language == "fa":
+            return base + " حال‌وهوای امروز: تأملی."
+        return base
+
+    def _memory_hint_for_user(self, user_id: str) -> str:
+        client = self._redis_client()
+        if client is None:
+            return "something important"
+        try:
+            rows = client.lrange(f"her:context:{user_id}", -8, -1)
+            for raw in reversed(rows):
+                payload = json.loads(raw)
+                if str(payload.get("role", "")).lower() == "user":
+                    text = str(payload.get("message", "")).strip()
+                    if text:
+                        return text[:80]
+        except Exception:  # noqa: BLE001
+            pass
+        return "something important"
+
+    def _last_user_context_timestamp(self, user_id: str) -> datetime | None:
+        del user_id
+        return datetime.now(timezone.utc) - timedelta(hours=24)
+
+    def _send_telegram_notification(self, chat_id: int, text: str) -> tuple[bool, str | None]:
         token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
         if not token:
-            logger.warning("Cannot send scheduler notification: TELEGRAM_BOT_TOKEN missing")
             return False, "missing_token"
         try:
-            from telegram import Bot
-
-            bot = Bot(token=token)
-            await bot.send_message(chat_id=chat_id, text=text)
+            url = f"https://api.telegram.org/bot{token}/sendMessage"
+            payload = urlencode({"chat_id": str(chat_id), "text": text}).encode("utf-8")
+            request = Request(url=url, data=payload, method="POST")
+            with urlopen(request, timeout=15) as response:
+                _ = response.read()
             return True, None
-        except Exception as exc:  # noqa: BLE001
+        except HTTPError as exc:
             message = str(exc).lower()
-            if "chat not found" in message:
-                logger.warning("Failed to send scheduler Telegram notification: Chat not found for chat_id=%s", chat_id)
+            if "404" in message:
                 return False, "chat_not_found"
-            if "forbidden" in message or "bot was blocked" in message:
-                logger.warning("Failed to send scheduler Telegram notification: bot forbidden for chat_id=%s", chat_id)
+            if "403" in message:
                 return False, "forbidden"
-            logger.warning("Failed to send scheduler Telegram notification: %s", exc)
+            return False, "transient_error"
+        except Exception:  # noqa: BLE001
             return False, "transient_error"
 
     @staticmethod
@@ -848,26 +914,6 @@ class TaskScheduler:
             return notify_user
         return None
 
-    def _log_reminder_state_change(self, task: dict[str, Any], old_status: str, new_status: str) -> None:
-        payload = {
-            "event": "reminder_state_change",
-            "reminder_id": str(task.get("name", "unknown")),
-            "old_status": old_status,
-            "new_status": new_status,
-            "retry_count": int(task.get("retry_count", 0) or 0),
-            "max_retries": int(task.get("max_retries", 3) or 3),
-            "last_error": str(task.get("last_error", "") or ""),
-            "chat_id": task.get("chat_id"),
-            "next_run": task.get("_next_run", ""),
-        }
-        logger.info(payload)
-        self._decision_logger.log(
-            event_type="reminder_state_change",
-            summary=f"Reminder {task.get('name', 'unknown')} {old_status} -> {new_status}",
-            source="scheduler",
-            details=payload,
-        )
-
     @staticmethod
     def _render_reminder_text_with_local_time(text: str, triggered_at_utc: datetime, timezone_name: str) -> str:
         tz_name = timezone_name.strip() or "UTC"
@@ -878,213 +924,211 @@ class TaskScheduler:
         except Exception:  # noqa: BLE001
             return text
 
-    @staticmethod
-    def _safe_eval(expression: str, context: dict[str, Any]) -> Any:
-        safe_globals = {
-            "__builtins__": {},
-            "abs": abs,
-            "min": min,
-            "max": max,
-            "sum": sum,
-            "len": len,
-            "round": round,
-            "int": int,
-            "float": float,
-            "str": str,
-            "bool": bool,
-        }
-        return eval(expression, safe_globals, context)  # noqa: S307
-
-    @staticmethod
-    def _format_template(template: str, context: dict[str, Any]) -> str:
-        rendered = template
-        for key, value in context.items():
-            placeholder = "{" + str(key) + "}"
-            if placeholder in rendered:
-                rendered = rendered.replace(placeholder, str(value))
-        return rendered
-
-    @staticmethod
-    def _fetch_json(url: str, timeout_seconds: int = 10) -> dict[str, Any] | list[Any] | None:
-        try:
-            with urlopen(url, timeout=timeout_seconds) as response:
-                return json.loads(response.read().decode("utf-8"))
-        except Exception:  # noqa: BLE001
+    def _normalize_task(self, task: Any) -> dict[str, Any] | None:
+        if not isinstance(task, dict):
             return None
+        name = str(task.get("name", "")).strip()
+        if not name:
+            return None
+        interval = str(task.get("interval", "")).strip().lower()
+        if not self.is_valid_interval(interval):
+            return None
+        normalized = dict(task)
+        normalized["name"] = name
+        normalized["interval"] = interval
+        normalized["enabled"] = bool(task.get("enabled", True))
+        normalized["type"] = str(task.get("type", "custom")).strip().lower() or "custom"
+        normalized["one_time"] = bool(task.get("one_time", interval == "once"))
+        normalized.setdefault("max_retries", 2)
+        normalized.setdefault("retry_delay_seconds", 30)
 
-    async def _execute_workflow_step(
-        self,
-        task: dict[str, Any],
-        step: dict[str, Any],
-        context: dict[str, Any],
-    ) -> str:
-        if "when" in step:
-            when_expr = str(step.get("when", "True"))
-            try:
-                if not bool(self._safe_eval(when_expr, context)):
-                    return "step skipped (when=false)"
-            except NameError as exc:
-                logger.warning(
-                    "Workflow task '%s' step skipped due to undefined name in when='%s': %s",
-                    task.get("name", "unknown"),
-                    when_expr,
-                    exc,
-                )
-                return "step skipped (when=undefined name)"
+        run_at = str(task.get("run_at", "")).strip()
+        if run_at:
+            parsed = self._parse_iso_timestamp(run_at)
+            if parsed is not None:
+                normalized["run_at"] = parsed.isoformat()
 
-        action = str(step.get("action", "")).strip().lower()
-        if not action:
-            return "step skipped: missing action"
+        at_value = str(task.get("at", "")).strip()
+        if at_value and self._parse_clock(at_value) is not None:
+            normalized["at"] = at_value
 
-        if action == "fetch_json":
-            url = self._format_template(str(step.get("url", "")), context)
-            if not url:
-                return "fetch_json failed: missing url"
-            data = self._fetch_json(url)
-            if data is None:
-                return f"fetch_json failed: {url}"
-            save_as = str(step.get("save_as", "data")).strip() or "data"
-            context[save_as] = data
-            return f"fetch_json ok -> {save_as}"
-
-        if action == "set":
-            key = str(step.get("key", "")).strip()
-            if not key:
-                return "set failed: missing key"
-            if "expr" in step:
-                expr = str(step.get("expr", ""))
-                try:
-                    value = self._safe_eval(expr, context)
-                except NameError as exc:
-                    logger.warning(
-                        "Workflow task '%s' set failed due to undefined name in expr='%s': %s",
-                        task.get("name", "unknown"),
-                        expr,
-                        exc,
-                    )
-                    return "set failed: undefined name in expr"
-            else:
-                value = step.get("value")
-            context[key] = value
-            return f"set {key}"
-
-        if action == "set_state":
-            key = str(step.get("key", "")).strip()
-            if not key:
-                return "set_state failed: missing key"
-            state = context.get("state")
-            if not isinstance(state, dict):
-                return "set_state failed: state unavailable"
-            if "expr" in step:
-                expr = str(step.get("expr", ""))
-                try:
-                    value = self._safe_eval(expr, context)
-                except NameError as exc:
-                    logger.warning(
-                        "Workflow task '%s' set_state failed due to undefined name in expr='%s': %s",
-                        task.get("name", "unknown"),
-                        expr,
-                        exc,
-                    )
-                    return "set_state failed: undefined name in expr"
-            else:
-                value = step.get("value")
-            state[key] = value
-            context[key] = value
-            return f"set_state {key}"
-
-        if action == "notify":
-            user_id = self._resolve_notify_user_id(task)
-            if user_id is None:
-                return "notify failed: notify_user_id missing"
-            message = self._format_template(str(step.get("message", "Task triggered")), context)
-            sent, _ = await self._send_telegram_notification(user_id, message)
-            return "notify sent" if sent else "notify failed"
-
-        if action == "webhook":
-            webhook_url = self._format_template(str(step.get("url", "")), context)
-            if not webhook_url:
-                return "webhook failed: missing url"
-            payload: Any
-            if "payload_expr" in step:
-                payload_expr = str(step.get("payload_expr", ""))
-                try:
-                    payload = self._safe_eval(payload_expr, context)
-                except NameError as exc:
-                    logger.warning(
-                        "Workflow task '%s' webhook failed due to undefined name in payload_expr='%s': %s",
-                        task.get("name", "unknown"),
-                        payload_expr,
-                        exc,
-                    )
-                    return "webhook failed: undefined name in payload_expr"
-            else:
-                payload = step.get("payload", {})
-            request = Request(
-                webhook_url,
-                data=json.dumps(payload).encode("utf-8"),
-                headers={"Content-Type": "application/json"},
-                method="POST",
-            )
-            with urlopen(request, timeout=10):
-                pass
-            return "webhook sent"
-
-        if action == "log":
-            message = self._format_template(str(step.get("message", "")), context)
-            logger.info("Workflow task '%s': %s", task.get("name", "unknown"), message)
-            return "log written"
-
-        return f"unknown action: {action}"
-
-    async def _execute_workflow_task(self, task: dict[str, Any]) -> str:
-        """Generic chain-based workflow with condition + actions."""
-        steps = task.get("steps", [])
-        if not isinstance(steps, list) or not steps:
-            return "workflow skipped: missing steps"
-
-        state = task.setdefault("_state", {})
-        if not isinstance(state, dict):
-            state = {}
-            task["_state"] = state
-
-        context: dict[str, Any] = {
-            "task_name": task.get("name", "unknown"),
-            "now_utc": datetime.utcnow().isoformat() + "Z",
-            "state": state,
-            "task": task,
-        }
-
-        # Optional source fetch before evaluating condition.
-        source_url = str(task.get("source_url", "")).strip()
-        if source_url:
-            rendered_url = self._format_template(source_url, context)
-            source_data = self._fetch_json(rendered_url)
-            if source_data is not None:
-                context["source"] = source_data
-
-        condition = str(task.get("condition_expr", "True")).strip() or "True"
+        timezone_name = str(task.get("timezone", self._system_timezone())).strip() or self._system_timezone()
         try:
-            if not bool(self._safe_eval(condition, context)):
-                return "condition=false"
-        except NameError as exc:
-            logger.warning(
-                "Workflow task '%s' condition evaluated false due to undefined name in condition_expr='%s': %s",
-                task.get("name", "unknown"),
-                condition,
-                exc,
-            )
-            return "condition=false (undefined name)"
+            ZoneInfo(timezone_name)
+            normalized["timezone"] = timezone_name
+        except Exception:  # noqa: BLE001
+            normalized["timezone"] = "UTC"
 
-        outputs: list[str] = []
-        for raw_step in steps:
-            if not isinstance(raw_step, dict):
+        weekdays = normalize_weekdays_input(task.get("weekdays"))
+        if weekdays:
+            normalized["weekdays"] = weekdays
+
+        if normalized["type"] == "reminder":
+            normalized["chat_id"] = self._coerce_chat_id(task.get("chat_id"))
+            normalized["status"] = str(task.get("status", "PENDING")).upper() or "PENDING"
+            normalized["retry_count"] = max(0, int(task.get("retry_count", 0) or 0))
+            normalized["max_retries"] = max(1, int(task.get("max_retries", 3) or 3))
+            normalized["last_error"] = str(task.get("last_error", "") or "")
+            normalized["message"] = str(task.get("message", "Reminder") or "Reminder")
+
+        return normalized
+
+    def _serializable_tasks(self) -> list[dict[str, Any]]:
+        return [{k: v for k, v in task.items() if not str(k).startswith("_")} for task in self.tasks]
+
+    def persist_tasks(self) -> tuple[bool, str]:
+        path = self._config_path or resolve_config_file("scheduler.yaml")
+        try:
+            payload = {"tasks": self._serializable_tasks()}
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("w", encoding="utf-8") as handle:
+                yaml.safe_dump(payload, handle, sort_keys=False)
+            self._publish_scheduler_state()
+            return True, f"saved to {path}"
+        except Exception as exc:  # noqa: BLE001
+            return False, f"failed to write {path}: {exc}"
+
+    async def run_task_now(self, name: str) -> tuple[bool, str]:
+        task = self._find_task(name)
+        if task is None:
+            return False, "task not found"
+        self._run_task_job(name)
+        return True, "executed"
+
+    def add_task(self, name: str, interval: str, task_type: str = "custom", enabled: bool = True, **kwargs: Any) -> None:
+        interval = str(interval).strip().lower()
+        if not self.is_valid_interval(interval):
+            raise ValueError("Invalid interval. Use once|hourly|daily|weekly|every_<N>_minutes|every_<N>_hours|every_<N>_days")
+        payload = {
+            "name": name,
+            "interval": interval,
+            "type": task_type,
+            "enabled": enabled,
+            **kwargs,
+        }
+        normalized = self._normalize_task(payload)
+        if normalized is None:
+            raise ValueError("Task configuration is invalid")
+        if str(normalized.get("type", "")).lower() == "reminder" and self._resolve_reminder_chat_id(normalized) is None:
+            raise ValueError("Chat ID required for reminder tasks")
+        self.tasks.append(normalized)
+        self._upsert_task_job(normalized)
+        self._publish_scheduler_state()
+
+    def set_task_interval(self, name: str, interval: str) -> bool:
+        interval = str(interval).strip().lower()
+        if not self.is_valid_interval(interval):
+            raise ValueError("Invalid interval. Use once|hourly|daily|weekly|every_<N>_minutes|every_<N>_hours|every_<N>_days")
+        for task in self.tasks:
+            if str(task.get("name", "")) == name:
+                task["interval"] = interval
+                self._upsert_task_job(task)
+                self._publish_scheduler_state()
+                return True
+        return False
+
+    def set_task_enabled(self, name: str, enabled: bool) -> bool:
+        for task in self.tasks:
+            if str(task.get("name", "")) == name:
+                task["enabled"] = bool(enabled)
+                self._upsert_task_job(task)
+                self._publish_scheduler_state()
+                return True
+        return False
+
+    def get_tasks(self) -> list[dict[str, Any]]:
+        return [dict(item) for item in self.tasks]
+
+    def _next_run_for_task(self, task_name: str) -> str:
+        if self._scheduler is None:
+            return ""
+        job = self._scheduler.get_job(f"task:{task_name}")
+        if not job or not job.next_run_time:
+            return ""
+        return job.next_run_time.astimezone(timezone.utc).isoformat()
+
+    def get_upcoming_jobs(self, limit: int = 20) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        if self._scheduler is None:
+            return rows
+        for task in self.tasks:
+            if not bool(task.get("enabled", True)):
                 continue
-            outcome = await self._execute_workflow_step(task, raw_step, context)
-            outputs.append(outcome)
-        return "; ".join(outputs) if outputs else "workflow completed"
+            name = str(task.get("name", ""))
+            rows.append(
+                {
+                    "name": name,
+                    "type": task.get("type", "custom"),
+                    "interval": task.get("interval", ""),
+                    "timezone": task.get("timezone", self._system_timezone()),
+                    "at": task.get("at", ""),
+                    "run_at": task.get("run_at", ""),
+                    "one_time": bool(task.get("one_time", False)),
+                    "max_retries": int(task.get("max_retries", 2) or 0),
+                    "retry_delay_seconds": int(task.get("retry_delay_seconds", 30) or 0),
+                    "status": str(task.get("status", "PENDING")),
+                    "retry_count": int(task.get("retry_count", 0) or 0),
+                    "last_error": str(task.get("last_error", "") or ""),
+                    "chat_id": task.get("chat_id"),
+                    "next_run": self._next_run_for_task(name),
+                    "enabled": bool(task.get("enabled", True)),
+                }
+            )
+        rows.sort(key=lambda item: str(item.get("next_run", "") or "~"))
+        return rows[: max(1, int(limit))]
 
-    def _redis_client(self):
+    def _publish_scheduler_state(self) -> None:
+        client = self._redis_client()
+        if client is None:
+            return
+        try:
+            payload = {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "task_count": len(self.tasks),
+                "system_tz": self._system_timezone(),
+                "default_user_tz": os.getenv("USER_TIMEZONE", "UTC"),
+                "upcoming": self.get_upcoming_jobs(limit=100),
+            }
+            client.set("her:scheduler:state", json.dumps(payload))
+        except Exception:  # noqa: BLE001
+            return
+
+    def _log_job_execution(
+        self,
+        name: str,
+        job_type: str,
+        success: bool,
+        result: str,
+        error: str,
+        execution_time: float,
+        next_run: str,
+    ) -> None:
+        payload = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "name": name,
+            "type": job_type,
+            "success": success,
+            "result": result,
+            "error": error,
+            "execution_time": execution_time,
+            "next_run": next_run,
+        }
+        self._decision_logger.log(
+            event_type="scheduler_execution",
+            summary=f"Task '{name}' executed ({'success' if success else 'failed'})",
+            source="scheduler",
+            details=payload,
+        )
+        client = self._redis_client()
+        if client is None:
+            return
+        try:
+            client.lpush("her:scheduler:jobs", json.dumps(payload))
+            client.ltrim("her:scheduler:jobs", 0, 99)
+        except Exception:  # noqa: BLE001
+            return
+
+    def _redis_client(self) -> Any:
         try:
             import redis
 
@@ -1097,203 +1141,11 @@ class TaskScheduler:
         except Exception:  # noqa: BLE001
             return None
 
-    def _persist_runtime_state(self) -> None:
-        client = self._redis_client()
-        if client is None:
-            return
-        try:
-            state = {
-                str(task.get("name", "")): {
-                    "last_run": task.get("_last_run", ""),
-                    "next_run": task.get("_next_run", ""),
-                }
-                for task in self.tasks
-                if task.get("name")
-            }
-            client.set("her:scheduler:runtime_state", json.dumps(state))
-        except Exception:  # noqa: BLE001
-            return
 
-    def _restore_runtime_state(self) -> None:
-        client = self._redis_client()
-        if client is None:
-            return
-        try:
-            raw = client.get("her:scheduler:runtime_state")
-            if not raw:
-                return
-            state = json.loads(raw)
-            if not isinstance(state, dict):
-                return
-            for task in self.tasks:
-                name = str(task.get("name", "")).strip()
-                persisted = state.get(name, {}) if name else {}
-                if not isinstance(persisted, dict):
-                    continue
-                last_run = str(persisted.get("last_run", "")).strip()
-                next_run = str(persisted.get("next_run", "")).strip()
-                if last_run:
-                    task["_last_run"] = last_run
-                if next_run:
-                    task["_next_run"] = next_run
-        except Exception:  # noqa: BLE001
-            return
-
-    def _recompute_all_next_runs(self, now_utc: datetime) -> None:
-        for task in self.tasks:
-            next_run = self._compute_next_run(now_utc, task)
-            if next_run:
-                task["_next_run"] = next_run.isoformat()
-            else:
-                task.pop("_next_run", None)
-
-    def get_upcoming_jobs(self, limit: int = 20) -> list[dict[str, Any]]:
-        upcoming: list[dict[str, Any]] = []
-        for task in self.tasks:
-            if not task.get("enabled", True):
-                continue
-            next_run = str(task.get("_next_run", "")).strip()
-            next_run_user_tz = ""
-            next_run_dt = self._parse_iso_timestamp(next_run)
-            user_tz_name = str(task.get("user_timezone", task.get("timezone", os.getenv("USER_TIMEZONE", "UTC")))).strip() or "UTC"
-            if next_run_dt is not None:
-                try:
-                    next_run_user_tz = next_run_dt.astimezone(ZoneInfo(user_tz_name)).isoformat()
-                except Exception:  # noqa: BLE001
-                    next_run_user_tz = next_run
-            upcoming.append(
-                {
-                    "name": task.get("name", "unknown"),
-                    "type": task.get("type", "custom"),
-                    "interval": task.get("interval", ""),
-                    "timezone": task.get("timezone", os.getenv("TZ", "UTC")),
-                    "at": task.get("at", ""),
-                    "run_at": task.get("run_at", ""),
-                    "one_time": bool(task.get("one_time", False)),
-                    "max_retries": int(task.get("max_retries", 2) or 0),
-                    "retry_delay_seconds": int(task.get("retry_delay_seconds", 30) or 0),
-                    "status": str(task.get("status", "PENDING")),
-                    "retry_count": int(task.get("retry_count", 0) or 0),
-                    "last_error": str(task.get("last_error", "") or ""),
-                    "chat_id": task.get("chat_id"),
-                    "next_run": next_run,
-                    "next_trigger_user_tz": next_run_user_tz,
-                    "enabled": bool(task.get("enabled", True)),
-                }
-            )
-
-        upcoming.sort(key=lambda item: str(item.get("next_run", "")))
-        return upcoming[: max(1, limit)]
-
-    def _publish_scheduler_state(self) -> None:
-        client = self._redis_client()
-        if client is None:
-            return
-        try:
-            payload = {
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "task_count": len(self.tasks),
-                "system_tz": os.getenv("TZ", "UTC"),
-                "default_user_tz": os.getenv("USER_TIMEZONE", "UTC"),
-                "upcoming": self.get_upcoming_jobs(limit=100),
-            }
-            client.set("her:scheduler:state", json.dumps(payload))
-        except Exception:  # noqa: BLE001
-            return
-
-    def add_task(
-        self,
-        name: str,
-        interval: str,
-        task_type: str = "custom",
-        enabled: bool = True,
-        **kwargs: Any,
-    ):
-        """Add a task to the scheduler."""
-        interval = interval.lower().strip()
-        if not self.is_valid_interval(interval):
-            raise ValueError(
-                "Invalid interval. Use once|hourly|daily|weekly|every_<N>_minutes|every_<N>_hours|every_<N>_days"
-            )
-        task = {
-            "name": name,
-            "interval": interval,
-            "type": task_type,
-            "enabled": enabled,
-            **kwargs,
-        }
-        normalized = self._normalize_task(task)
-        if normalized is None:
-            raise ValueError("Task configuration is invalid")
-        if str(normalized.get("type", "")).lower() == "reminder" and self._resolve_reminder_chat_id(normalized) is None:
-            raise ValueError("Chat ID required for reminder tasks")
-        self.tasks.append(normalized)
-        self._recompute_all_next_runs(datetime.now(timezone.utc))
-        self._persist_runtime_state()
-        self._publish_scheduler_state()
-        logger.info("Added scheduled task: %s (interval: %s)", name, interval)
-
-    def set_task_interval(self, name: str, interval: str) -> bool:
-        """Update interval for an existing task."""
-        interval = interval.lower().strip()
-        if not self.is_valid_interval(interval):
-            raise ValueError(
-                "Invalid interval. Use once|hourly|daily|weekly|every_<N>_minutes|every_<N>_hours|every_<N>_days"
-            )
-        for task in self.tasks:
-            if task.get("name") == name:
-                task["interval"] = interval
-                task.pop("_last_run", None)
-                task.pop("_next_run", None)
-                self._recompute_all_next_runs(datetime.now(timezone.utc))
-                self._persist_runtime_state()
-                self._publish_scheduler_state()
-                return True
-        return False
-
-    def set_task_enabled(self, name: str, enabled: bool) -> bool:
-        """Enable/disable an existing task."""
-        for task in self.tasks:
-            if task.get("name") == name:
-                task["enabled"] = enabled
-                if enabled:
-                    task.pop("_last_run", None)
-                task.pop("_next_run", None)
-                self._recompute_all_next_runs(datetime.now(timezone.utc))
-                self._persist_runtime_state()
-                self._publish_scheduler_state()
-                return True
-        return False
-
-    async def run_task_now(self, name: str) -> tuple[bool, str]:
-        """Execute a configured task immediately by name."""
-        for task in self.tasks:
-            if task.get("name") == name:
-                success = await self._execute_task(task)
-                now = datetime.now(timezone.utc)
-                if success or not bool(task.get("retry_on_failure", True)):
-                    task["_last_run"] = now.isoformat()
-                next_run = self._compute_next_run(now, task)
-                if next_run:
-                    task["_next_run"] = next_run.isoformat()
-                else:
-                    task.pop("_next_run", None)
-                self._persist_runtime_state()
-                self._publish_scheduler_state()
-                return True, "executed" if success else "failed"
-        return False, "task not found"
-
-    def get_tasks(self) -> list[dict[str, Any]]:
-        """Get all scheduled tasks."""
-        return self.tasks.copy()
-
-
-# Global scheduler instance
 _scheduler: TaskScheduler | None = None
 
 
 def get_scheduler() -> TaskScheduler:
-    """Get the global scheduler instance."""
     global _scheduler
     if _scheduler is None:
         _scheduler = TaskScheduler()

@@ -18,4 +18,5 @@ aiohttp==3.9.1
 httpx==0.27.2
 docker==7.1.0
 tweepy==4.14.0
-schedule==1.2.0
+APScheduler==3.10.4
+SQLAlchemy==2.0.36

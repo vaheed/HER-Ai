@@ -118,3 +118,20 @@ CREATE TABLE IF NOT EXISTS reinforcement_events (
     emotionally_aligned BOOLEAN NOT NULL DEFAULT TRUE,
     reasoning JSONB
 );
+
+CREATE TABLE IF NOT EXISTS scheduler_job_locks (
+    lock_name TEXT PRIMARY KEY,
+    holder TEXT,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS proactive_message_audit (
+    proactive_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id TEXT REFERENCES users(user_id),
+    scheduled_at TIMESTAMPTZ NOT NULL,
+    sent_at TIMESTAMPTZ,
+    message_kind TEXT NOT NULL,
+    mood TEXT NOT NULL,
+    success BOOLEAN NOT NULL DEFAULT FALSE,
+    details JSONB
+);

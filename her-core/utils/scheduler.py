@@ -290,19 +290,21 @@ class TaskScheduler:
         if self._scheduler is None:
             return
         self._scheduler.add_job(
-            func=self._run_system_reminder_processor,
+            func=_scheduler_run_system_job_entry,
             trigger=IntervalTrigger(minutes=1, timezone=self._system_timezone()),
             id="system:reminder_processor",
             replace_existing=True,
+            kwargs={"job_name": "reminder_processor"},
             max_instances=1,
             coalesce=True,
             misfire_grace_time=60,
         )
         self._scheduler.add_job(
-            func=self._run_follow_up_logic,
+            func=_scheduler_run_system_job_entry,
             trigger=IntervalTrigger(minutes=30, timezone=self._system_timezone()),
             id="system:follow_up_logic",
             replace_existing=True,
+            kwargs={"job_name": "follow_up_logic"},
             max_instances=1,
             coalesce=True,
             misfire_grace_time=120,
@@ -335,7 +337,7 @@ class TaskScheduler:
             return
 
         self._scheduler.add_job(
-            func=self._run_task_job,
+            func=_scheduler_run_task_job_entry,
             trigger=trigger,
             id=job_id,
             replace_existing=True,
@@ -1150,3 +1152,19 @@ def get_scheduler() -> TaskScheduler:
     if _scheduler is None:
         _scheduler = TaskScheduler()
     return _scheduler
+
+
+def _scheduler_run_task_job_entry(task_name: str) -> None:
+    scheduler = get_scheduler()
+    scheduler._run_task_job(task_name)  # noqa: SLF001
+
+
+def _scheduler_run_system_job_entry(job_name: str) -> None:
+    scheduler = get_scheduler()
+    name = str(job_name).strip().lower()
+    if name == "reminder_processor":
+        scheduler._run_system_reminder_processor()  # noqa: SLF001
+        return
+    if name == "follow_up_logic":
+        scheduler._run_follow_up_logic()  # noqa: SLF001
+        return

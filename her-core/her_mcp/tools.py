@@ -1,10 +1,10 @@
-import asyncio
 import json
 import logging
 import os
 import socket
 from pathlib import Path
 import subprocess
+import re
 from typing import Any
 from urllib.parse import quote_plus
 
@@ -39,6 +39,24 @@ class CurlWebSearchTool(BaseTool):
     name: str = "web_search"
     description: str = "Search the web for current information and sources without API keys."
 
+    @staticmethod
+    def _extract_html_results(html: str, max_results: int) -> list[str]:
+        rows: list[str] = []
+        pattern = re.compile(
+            r'<a[^>]+class="[^"]*result__a[^"]*"[^>]+href="(?P<href>[^"]+)"[^>]*>(?P<title>.*?)</a>',
+            re.IGNORECASE | re.DOTALL,
+        )
+        for match in pattern.finditer(html):
+            href = re.sub(r"\s+", " ", match.group("href")).strip()
+            title = re.sub(r"<[^>]+>", "", match.group("title"))
+            title = re.sub(r"\s+", " ", title).strip()
+            if not href or not title:
+                continue
+            rows.append(f"- {title} ({href})")
+            if len(rows) >= max_results:
+                break
+        return rows
+
     def _run(self, query: str, max_results: int = 5, **_: Any) -> str:
         _decision_logger.log(
             event_type="tool_call",
@@ -48,6 +66,9 @@ class CurlWebSearchTool(BaseTool):
         )
         if not query.strip():
             return "Web search failed: empty query"
+        if int(max_results) <= 0:
+            return "Web search failed: max_results must be >= 1"
+        max_results = max(1, min(10, int(max_results)))
 
         url = (
             "https://api.duckduckgo.com/?q="
@@ -58,7 +79,7 @@ class CurlWebSearchTool(BaseTool):
         payload = None
         try:
             result = subprocess.run(
-                ["curl", "-fsSL", url],
+                ["curl", "-fsSL", "--max-time", "20", "-A", "Mozilla/5.0", url],
                 capture_output=True,
                 text=True,
                 check=True,
@@ -100,6 +121,21 @@ class CurlWebSearchTool(BaseTool):
                     lines.append(f"- {nested['Text']} ({nested['FirstURL']})")
 
         if not lines:
+            # Fallback to DuckDuckGo HTML results when instant answer has no records.
+            html_url = f"https://duckduckgo.com/html/?q={quote_plus(query)}"
+            try:
+                html_resp = subprocess.run(
+                    ["curl", "-fsSL", "--max-time", "20", "-A", "Mozilla/5.0", html_url],
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                    timeout=20,
+                )
+                html_lines = self._extract_html_results(html_resp.stdout, max_results=max_results)
+                if html_lines:
+                    return "\n".join(html_lines)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("DuckDuckGo HTML fallback failed: %s", exc)
             heading = payload.get("Heading") or "No direct results"
             return f"Web search: {heading}"
 
@@ -130,7 +166,7 @@ class MCPTool(BaseTool):
                     "args_preview": str(call_args)[:200],
                 },
             )
-            result = str(asyncio.run(self.mcp_manager.call_tool(self.server_name, self.tool_name, call_args)))
+            result = str(self.mcp_manager.call_tool_sync(self.server_name, self.tool_name, call_args))
             _decision_logger.log(
                 event_type="tool_result",
                 summary=f"MCP tool result {self.server_name}.{self.tool_name}",

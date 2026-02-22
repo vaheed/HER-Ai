@@ -10,6 +10,9 @@ CREATE TABLE IF NOT EXISTS users (
     preferences JSONB
 );
 
+CREATE INDEX IF NOT EXISTS idx_users_last_interaction
+ON users (last_interaction DESC NULLS LAST, created_at DESC);
+
 
 DO $$
 DECLARE
@@ -106,6 +109,9 @@ CREATE TABLE IF NOT EXISTS decision_logs (
     details JSONB
 );
 
+CREATE INDEX IF NOT EXISTS idx_decision_logs_event_timestamp
+ON decision_logs (event_type, timestamp DESC);
+
 CREATE TABLE IF NOT EXISTS reinforcement_events (
     reinforcement_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     timestamp TIMESTAMPTZ DEFAULT NOW(),
@@ -137,6 +143,12 @@ CREATE TABLE IF NOT EXISTS proactive_message_audit (
     daily_slot SMALLINT,
     details JSONB
 );
+
+CREATE INDEX IF NOT EXISTS idx_proactive_message_audit_user_sent_at
+ON proactive_message_audit (user_id, sent_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_proactive_message_audit_success_day
+ON proactive_message_audit (success, day_bucket);
 
 ALTER TABLE proactive_message_audit
 ADD COLUMN IF NOT EXISTS day_bucket DATE NOT NULL DEFAULT CURRENT_DATE;

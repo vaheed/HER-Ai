@@ -18,14 +18,18 @@ import asyncio
 import time
 import base64
 import shutil
+import ipaddress
+import re
 from datetime import datetime, timezone
 from typing import Any
+from urllib.parse import urlparse
 
 from langchain_core.tools import BaseTool
 from utils.decision_log import DecisionLogger
 
 logger = logging.getLogger(__name__)
 _decision_logger = DecisionLogger()
+_SAFE_HOST_RE = re.compile(r"^(?:[A-Za-z0-9-]{1,63}\.)+[A-Za-z]{2,63}$")
 
 
 class SandboxExecutor:
@@ -910,6 +914,69 @@ class SandboxNetworkTool(BaseTool):
 
     container_name: str = "her-sandbox"
 
+    @staticmethod
+    def _normalize_target(target: str) -> str | None:
+        candidate = str(target or "").strip()
+        if not candidate:
+            return None
+        parsed = urlparse(candidate if "://" in candidate else f"https://{candidate}")
+        host = (parsed.hostname or "").strip()
+        if not host:
+            return None
+        try:
+            ipaddress.ip_address(host)
+            return host
+        except ValueError:
+            pass
+        if _SAFE_HOST_RE.match(host):
+            return host
+        return None
+
+    @staticmethod
+    def _normalize_ports(ports: str) -> str | None:
+        value = str(ports or "").strip()
+        if not value:
+            return None
+        parts = value.split(",")
+        normalized_parts: list[str] = []
+        for part in parts:
+            token = part.strip()
+            if not token:
+                continue
+            if "-" in token:
+                start_text, end_text = token.split("-", 1)
+                if not (start_text.isdigit() and end_text.isdigit()):
+                    return None
+                start_port = int(start_text)
+                end_port = int(end_text)
+                if not (1 <= start_port <= end_port <= 65535):
+                    return None
+                normalized_parts.append(f"{start_port}-{end_port}")
+            else:
+                if not token.isdigit():
+                    return None
+                port = int(token)
+                if not (1 <= port <= 65535):
+                    return None
+                normalized_parts.append(str(port))
+        return ",".join(normalized_parts) if normalized_parts else None
+
+    @staticmethod
+    def _summarize_nmap_output(raw_output: str) -> str:
+        text = str(raw_output or "").strip()
+        if not text:
+            return "No output from nmap."
+        open_ports = re.findall(r"(?m)^(\d+)/(tcp|udp)\s+open\b", text)
+        if not open_ports:
+            if "nmap: command not found" in text.lower():
+                return "nmap is not installed inside sandbox."
+            if "0 hosts up" in text.lower():
+                return "Host appears down or unreachable."
+            return text
+        ports = ", ".join(f"{port}/{proto}" for port, proto in open_ports[:25])
+        suffix = "" if len(open_ports) <= 25 else f" (+{len(open_ports) - 25} more)"
+        return f"Open ports: {ports}{suffix}"
+
     def _run(
         self,
         target: str,
@@ -919,20 +986,27 @@ class SandboxNetworkTool(BaseTool):
         **_: Any,
     ) -> str:
         """Run diagnostic commands in sandbox."""
-        if not target.strip():
-            return "Error: Empty target"
+        normalized_target = self._normalize_target(target)
+        if not normalized_target:
+            return "Error: Invalid target host/domain."
 
         normalized_action = action.strip().lower()
         if normalized_action == "dns":
-            command = f"dig +short {target}"
+            command = f"dig +short {shlex.quote(normalized_target)}"
         elif normalized_action == "ping":
-            command = f"ping -c 4 {target}"
+            command = f"ping -c 4 {shlex.quote(normalized_target)}"
         elif normalized_action == "traceroute":
-            command = f"traceroute -m 15 {target}"
+            command = f"traceroute -m 15 {shlex.quote(normalized_target)}"
         elif normalized_action == "port_scan":
-            command = f"nmap -Pn -T4 -p {ports} {target}"
+            safe_ports = self._normalize_ports(ports)
+            if not safe_ports:
+                return "Error: Invalid ports format. Use values like 80,443 or 1-1024."
+            command = f"nmap -Pn -T4 -p {safe_ports} {shlex.quote(normalized_target)}"
         elif normalized_action == "ssl":
-            command = f"echo | openssl s_client -connect {target}:443 -servername {target}"
+            command = (
+                f"echo | openssl s_client -connect {shlex.quote(normalized_target)}:443 "
+                f"-servername {shlex.quote(normalized_target)}"
+            )
         else:
             return "Error: Unsupported action. Use dns, ping, traceroute, port_scan, or ssl."
 
@@ -946,7 +1020,10 @@ class SandboxNetworkTool(BaseTool):
             response_parts.append(f"❌ Network diagnostic failed (exit code: {result['exit_code']})")
 
         if result["output"]:
-            response_parts.append(f"\n📤 Output:\n{result['output']}")
+            if normalized_action == "port_scan":
+                response_parts.append(f"\n📤 Output:\n{self._summarize_nmap_output(result['output'])}")
+            else:
+                response_parts.append(f"\n📤 Output:\n{result['output']}")
         if result["error"]:
             response_parts.append(f"\n⚠️  Errors:\n{result['error']}")
         response_parts.append(f"\n⏱️  Execution time: {result['execution_time']:.2f}s")
@@ -971,27 +1048,29 @@ class SandboxSecurityScanTool(BaseTool):
         timeout: int = 90,
         **_: Any,
     ) -> str:
-        if not target.strip():
-            return "Error: Empty target"
+        normalized_target = SandboxNetworkTool._normalize_target(target)
+        if not normalized_target:
+            return "Error: Invalid target host/domain."
 
         normalized_mode = mode.strip().lower()
         if normalized_mode == "website":
+            url = target if "://" in target else f"https://{normalized_target}"
             script = f"""
 set -e
 echo "== HTTP HEADERS =="
-curl -fsSIL --max-time 20 "{target}" || true
+curl -fsSIL --max-time 20 {shlex.quote(url)} || true
 echo ""
 echo "== ROBOTS.TXT =="
-curl -fsSL --max-time 20 "{target.rstrip('/')}/robots.txt" || true
+curl -fsSL --max-time 20 {shlex.quote(url.rstrip('/') + '/robots.txt')} || true
 """
         elif normalized_mode == "host":
             script = f"""
 set -e
 echo "== NMAP TOP PORTS =="
-nmap -Pn -T4 --top-ports 200 "{target}" || true
+nmap -Pn -T4 --top-ports 200 {shlex.quote(normalized_target)} || true
 echo ""
 echo "== TLS HANDSHAKE =="
-echo | openssl s_client -connect "{target}:443" -servername "{target}" 2>/dev/null | head -n 40 || true
+echo | openssl s_client -connect {shlex.quote(normalized_target)}:443 -servername {shlex.quote(normalized_target)} 2>/dev/null | head -n 40 || true
 """
         else:
             return "Error: Unsupported mode. Use website or host."

@@ -13,6 +13,8 @@ import logging
 import os
 import random
 import re
+import ast
+import asyncio
 import threading
 import time
 from dataclasses import dataclass
@@ -42,6 +44,55 @@ from utils.user_profiles import UserProfileStore
 
 logger = logging.getLogger(__name__)
 _TERMINAL_REMINDER_STATES = {"SENT", "FAILED"}
+_WORKFLOW_ALLOWED_FUNCS: dict[str, Any] = {
+    "float": float,
+    "int": int,
+    "str": str,
+    "len": len,
+    "abs": abs,
+    "round": round,
+    "min": min,
+    "max": max,
+    "bool": bool,
+}
+_WORKFLOW_ALLOWED_AST_NODES = (
+    ast.Expression,
+    ast.Name,
+    ast.Load,
+    ast.Constant,
+    ast.Dict,
+    ast.List,
+    ast.Tuple,
+    ast.Subscript,
+    ast.Attribute,
+    ast.Index,
+    ast.Slice,
+    ast.BinOp,
+    ast.UnaryOp,
+    ast.BoolOp,
+    ast.Compare,
+    ast.IfExp,
+    ast.Add,
+    ast.Sub,
+    ast.Mult,
+    ast.Div,
+    ast.FloorDiv,
+    ast.Mod,
+    ast.Pow,
+    ast.USub,
+    ast.UAdd,
+    ast.And,
+    ast.Or,
+    ast.Eq,
+    ast.NotEq,
+    ast.Lt,
+    ast.LtE,
+    ast.Gt,
+    ast.GtE,
+    ast.In,
+    ast.NotIn,
+    ast.Call,
+)
 
 
 @dataclass
@@ -666,6 +717,12 @@ class TaskScheduler:
             "state": task.setdefault("_state", {}),
             "now_utc": datetime.now(timezone.utc).isoformat(),
         }
+        source_url = str(task.get("source_url", "")).strip()
+        if source_url:
+            source_payload, source_err = self._fetch_workflow_source(source_url)
+            if source_err:
+                return False, "", source_err
+            context["source"] = source_payload
         for step in steps:
             if not isinstance(step, dict):
                 continue
@@ -673,22 +730,123 @@ class TaskScheduler:
             if action == "log":
                 outputs.append(str(step.get("message", "")))
             elif action == "notify":
+                when_expr = str(step.get("when", "")).strip()
+                if when_expr and not self._workflow_eval_bool(when_expr, context):
+                    outputs.append("notify_skipped")
+                    continue
                 notify_user_id = self._resolve_notify_user_id(task)
                 if notify_user_id is None:
+                    outputs.append("notify_skipped_missing_user")
                     continue
-                sent, reason = self._send_telegram_notification(notify_user_id, str(step.get("message", "Task triggered")))
+                raw_message = str(step.get("message", "Task triggered"))
+                message = self._workflow_format_message(raw_message, context)
+                sent, reason = self._send_telegram_notification(notify_user_id, message)
                 outputs.append("notify_sent" if sent else f"notify_failed:{reason}")
             elif action == "set_state":
                 key = str(step.get("key", "")).strip()
                 if key:
-                    context["state"][key] = step.get("value")
+                    expr = str(step.get("expr", "")).strip()
+                    value = self._workflow_eval_value(expr, context) if expr else step.get("value")
+                    context["state"][key] = value
                     outputs.append(f"set_state:{key}")
             elif action == "set":
                 key = str(step.get("key", "")).strip()
                 if key:
-                    context[key] = step.get("value")
+                    expr = str(step.get("expr", "")).strip()
+                    value = self._workflow_eval_value(expr, context) if expr else step.get("value")
+                    context[key] = value
                     outputs.append(f"set:{key}")
+            elif action == "assert":
+                expr = str(step.get("condition_expr", "")).strip()
+                if expr and not self._workflow_eval_bool(expr, context):
+                    return False, "", f"workflow_assertion_failed:{expr}"
+                outputs.append("assert_ok")
         return True, "; ".join(outputs) if outputs else "workflow_completed", ""
+
+    @staticmethod
+    def _validate_workflow_expression(expr: str, context: dict[str, Any]) -> tuple[bool, str]:
+        try:
+            parsed = ast.parse(expr, mode="eval")
+        except SyntaxError as exc:
+            return False, f"invalid syntax: {exc}"
+        for node in ast.walk(parsed):
+            if not isinstance(node, _WORKFLOW_ALLOWED_AST_NODES):
+                return False, f"disallowed expression node: {node.__class__.__name__}"
+            if isinstance(node, ast.Call):
+                if isinstance(node.func, ast.Name):
+                    if node.func.id not in _WORKFLOW_ALLOWED_FUNCS:
+                        return False, "disallowed function call"
+                elif isinstance(node.func, ast.Attribute):
+                    if node.func.attr != "get":
+                        return False, "disallowed method call"
+                    if not isinstance(node.func.value, ast.Name):
+                        return False, "disallowed method receiver"
+                    receiver = node.func.value.id
+                    if receiver not in context or not isinstance(context.get(receiver), dict):
+                        return False, "method receiver must be a known dict"
+                else:
+                    return False, "disallowed function call"
+            if isinstance(node, ast.Name):
+                if node.id not in context and node.id not in _WORKFLOW_ALLOWED_FUNCS:
+                    return False, f"unknown name: {node.id}"
+        return True, ""
+
+    def _workflow_eval_value(self, expr: str, context: dict[str, Any]) -> Any:
+        if not expr:
+            return None
+        valid, reason = self._validate_workflow_expression(expr, context)
+        if not valid:
+            raise ValueError(reason)
+        return eval(  # noqa: S307
+            compile(ast.parse(expr, mode="eval"), "<workflow_expr>", "eval"),
+            {"__builtins__": {}},
+            {**_WORKFLOW_ALLOWED_FUNCS, **context},
+        )
+
+    def _workflow_eval_bool(self, expr: str, context: dict[str, Any]) -> bool:
+        try:
+            return bool(self._workflow_eval_value(expr, context))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("workflow_condition_eval_failed", extra={"event": "workflow_condition_eval_failed", "expr": expr, "error": str(exc)})
+            return False
+
+    @staticmethod
+    def _workflow_format_message(template: str, context: dict[str, Any]) -> str:
+        try:
+            return str(template).format(**context)
+        except Exception:  # noqa: BLE001
+            return str(template)
+
+    @staticmethod
+    def _workflow_http_timeout_seconds() -> int:
+        return max(2, int(os.getenv("HER_WORKFLOW_HTTP_TIMEOUT_SECONDS", "12")))
+
+    @staticmethod
+    def _workflow_http_retries() -> int:
+        return max(1, int(os.getenv("HER_WORKFLOW_HTTP_RETRIES", "2")))
+
+    def _fetch_workflow_source(self, source_url: str) -> tuple[Any | None, str]:
+        retries = self._workflow_http_retries()
+        timeout = self._workflow_http_timeout_seconds()
+        request = Request(
+            url=source_url,
+            headers={"User-Agent": "HER-AI-Scheduler/1.0", "Accept": "application/json,text/plain,*/*"},
+            method="GET",
+        )
+        last_error = "unknown_error"
+        for _ in range(retries):
+            try:
+                with urlopen(request, timeout=timeout) as response:
+                    body = response.read().decode("utf-8", errors="replace")
+                try:
+                    return json.loads(body), ""
+                except json.JSONDecodeError:
+                    return body, ""
+            except HTTPError as exc:
+                last_error = f"workflow_source_http_{exc.code}"
+            except Exception as exc:  # noqa: BLE001
+                last_error = f"workflow_source_error:{exc}"
+        return None, last_error
 
     def _execute_self_optimization_task(self, task: dict[str, Any]) -> tuple[bool, str, str]:
         summary = self._reinforcement.summarize_recent_patterns(window=500)
@@ -1204,7 +1362,7 @@ class TaskScheduler:
         task = self._find_task(name)
         if task is None:
             return False, "task not found"
-        self._run_task_job(name)
+        await asyncio.to_thread(self._run_task_job, name)
         return True, "executed"
 
     def add_task(self, name: str, interval: str, task_type: str = "custom", enabled: bool = True, **kwargs: Any) -> None:

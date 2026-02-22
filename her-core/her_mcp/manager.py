@@ -4,6 +4,7 @@ import logging
 import os
 import re
 import shutil
+import threading
 from pathlib import Path
 from string import Template
 from typing import Any
@@ -241,8 +242,23 @@ class MCPManager:
 
     def call_tool_sync(self, server_name: str, tool_name: str, arguments: dict) -> Any:
         try:
-            loop = asyncio.get_running_loop()
-            raise RuntimeError("Cannot use call_tool_sync from a running event loop")
+            _ = asyncio.get_running_loop()
+            holder: dict[str, Any] = {}
+
+            def _runner() -> None:
+                try:
+                    holder["result"] = asyncio.run(self.call_tool(server_name, tool_name, arguments))
+                except Exception as exc:  # noqa: BLE001
+                    holder["error"] = exc
+
+            thread = threading.Thread(target=_runner, daemon=True)
+            thread.start()
+            thread.join(timeout=max(5, self.startup_timeout_seconds))
+            if thread.is_alive():
+                raise TimeoutError("MCP sync call timed out")
+            if "error" in holder:
+                raise holder["error"]
+            return holder.get("result")
         except RuntimeError as exc:
             if "running event loop" in str(exc):
                 raise

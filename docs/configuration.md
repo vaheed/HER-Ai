@@ -66,6 +66,8 @@ Configuration is driven by environment variables in `.env` and YAML files under 
 | `SCHEDULER_DATABASE_URL` | `` | APScheduler SQLAlchemy job-store URL (defaults to PostgreSQL env values) |
 | `HER_SCHEDULER_STATE_PUBLISH_MIN_INTERVAL_SECONDS` | `10` | Minimum interval between scheduler state publish operations |
 | `HER_SCHEDULER_AUTONOMY_CACHE_TTL_SECONDS` | `60` | Cache TTL for scheduler autonomy snapshot aggregation |
+| `HER_WORKFLOW_HTTP_TIMEOUT_SECONDS` | `12` | Timeout for workflow `source_url` fetch operations |
+| `HER_WORKFLOW_HTTP_RETRIES` | `2` | Retry count for workflow `source_url` HTTP fetch failures |
 | `MCP_CONFIG_PATH` | `mcp_servers.yaml` | MCP profile file name |
 | `MCP_SERVER_START_TIMEOUT_SECONDS` | `60` | Timeout per MCP server startup |
 | `SANDBOX_CONTAINER_NAME` | `her-sandbox` | Container target for sandbox tools |

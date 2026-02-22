@@ -278,6 +278,68 @@ class MessageHandlers:
     async def _reply_markdown(self, update: Update, text: str, **kwargs: Any) -> None:
         await self._reply(update, text, parse_mode="Markdown", **kwargs)
 
+    @staticmethod
+    def _typing_chunks(text: str, chunk_size: int = 140) -> list[str]:
+        content = str(text or "").strip()
+        if not content:
+            return []
+        if len(content) <= chunk_size:
+            return [content]
+        parts: list[str] = []
+        cursor = 0
+        while cursor < len(content):
+            end = min(len(content), cursor + chunk_size)
+            if end < len(content):
+                boundary = content.rfind(" ", cursor, end)
+                if boundary > cursor + 20:
+                    end = boundary
+            part = content[cursor:end].strip()
+            if part:
+                parts.append(part)
+            cursor = end
+        return parts
+
+    async def _reply_with_typing_effect(
+        self,
+        update: Update,
+        text: str,
+        *,
+        min_delay_seconds: float = 0.2,
+        max_delay_seconds: float = 0.55,
+        chunk_size: int = 140,
+    ) -> None:
+        message = update.effective_message
+        chat = update.effective_chat
+        if not message or not chat:
+            await self._reply(update, text[:3900])
+            return
+
+        chunks = self._typing_chunks(text, chunk_size=chunk_size)
+        if not chunks:
+            return
+        if len(chunks) == 1:
+            await self._reply(update, chunks[0][:3900])
+            return
+
+        sent = await message.reply_text(chunks[0][:3900])
+        assembled = chunks[0]
+        for part in chunks[1:]:
+            try:
+                await message.get_bot().send_chat_action(chat_id=chat.id, action="typing")
+            except Exception:  # noqa: BLE001
+                pass
+            assembled = f"{assembled} {part}".strip()
+            delay = min(
+                max_delay_seconds,
+                max(min_delay_seconds, len(part) / 650.0),
+            )
+            await asyncio.sleep(delay)
+            try:
+                await sent.edit_text(assembled[:3900])
+            except Exception:  # noqa: BLE001
+                await self._reply(update, assembled[:3900])
+                return
+
     def _safe_timezone_name(self, timezone_name: str | None) -> str:
         candidate = str(timezone_name or DEFAULT_USER_TIMEZONE).strip() or "UTC"
         try:
@@ -3305,7 +3367,7 @@ class MessageHandlers:
             previous_assistant_message=previous_assistant_message,
         )
         if response and not response_already_sent:
-            await self._reply(update, response[:3900])
+            await self._reply_with_typing_effect(update, response[:3900])
 
         self.memory.update_context(str(user_id), response, "assistant")
         if is_group:

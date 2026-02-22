@@ -41,6 +41,24 @@ class SandboxExecutor:
         self._container = None
         self._docker_checked = False
         self._docker_usable = False
+        self._metrics_redis_client = None
+
+    def _get_metrics_redis_client(self):
+        if self._metrics_redis_client is not None:
+            return self._metrics_redis_client
+        try:
+            import redis
+
+            self._metrics_redis_client = redis.Redis(
+                host=os.getenv("REDIS_HOST", "redis"),
+                port=int(os.getenv("REDIS_PORT", "6379")),
+                password=os.getenv("REDIS_PASSWORD", ""),
+                decode_responses=True,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Failed to initialize sandbox Redis metrics client: %s", exc)
+            self._metrics_redis_client = None
+        return self._metrics_redis_client
 
     @staticmethod
     def docker_available() -> bool:
@@ -485,18 +503,9 @@ class SandboxExecutor:
         )
 
         try:
-            import redis
-            redis_host = os.getenv("REDIS_HOST", "redis")
-            redis_port = int(os.getenv("REDIS_PORT", "6379"))
-            redis_password = os.getenv("REDIS_PASSWORD", "")
-
-            redis_client = redis.Redis(
-                host=redis_host,
-                port=redis_port,
-                password=redis_password,
-                decode_responses=True,
-            )
-
+            redis_client = self._get_metrics_redis_client()
+            if redis_client is None:
+                return
             redis_client.lpush("her:sandbox:executions", json.dumps(payload))
             redis_client.ltrim("her:sandbox:executions", 0, 99)
         except Exception as exc:  # noqa: BLE001

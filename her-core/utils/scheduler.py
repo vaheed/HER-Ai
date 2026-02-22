@@ -63,6 +63,18 @@ class TaskScheduler:
         self._sandbox_executor = SandboxExecutor(container_name=os.getenv("SANDBOX_CONTAINER_NAME", "her-sandbox"))
         self._start_lock = threading.Lock()
         self._scheduler: BackgroundScheduler | None = None
+        self._redis_cached = self._build_redis_client()
+        self._last_state_publish_monotonic = 0.0
+        self._state_publish_min_interval_seconds = max(
+            1,
+            int(os.getenv("HER_SCHEDULER_STATE_PUBLISH_MIN_INTERVAL_SECONDS", "10")),
+        )
+        self._autonomy_cache_ttl_seconds = max(
+            5,
+            int(os.getenv("HER_SCHEDULER_AUTONOMY_CACHE_TTL_SECONDS", "60")),
+        )
+        self._autonomy_cache_expires_at = 0.0
+        self._autonomy_cache_rows: list[dict[str, Any]] = []
         self._jobstores = {
             "default": SQLAlchemyJobStore(url=self._scheduler_db_url()),
         }
@@ -1282,19 +1294,27 @@ class TaskScheduler:
         if client is None:
             return
         try:
-            autonomy_rows: list[dict[str, Any]] = []
-            for profile in self._active_user_profiles(limit=30):
-                try:
-                    autonomy_rows.append(self._autonomy.profile_snapshot(str(profile.user_id)))
-                except Exception:  # noqa: BLE001
-                    continue
+            now_mono = time.monotonic()
+            if now_mono - self._last_state_publish_monotonic < self._state_publish_min_interval_seconds:
+                return
+            self._last_state_publish_monotonic = now_mono
+
+            if now_mono >= self._autonomy_cache_expires_at:
+                autonomy_rows: list[dict[str, Any]] = []
+                for profile in self._active_user_profiles(limit=30):
+                    try:
+                        autonomy_rows.append(self._autonomy.profile_snapshot(str(profile.user_id)))
+                    except Exception:  # noqa: BLE001
+                        continue
+                self._autonomy_cache_rows = autonomy_rows
+                self._autonomy_cache_expires_at = now_mono + float(self._autonomy_cache_ttl_seconds)
             payload = {
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "task_count": len(self.tasks),
                 "system_tz": self._system_timezone(),
                 "default_user_tz": os.getenv("USER_TIMEZONE", "UTC"),
                 "upcoming": self.get_upcoming_jobs(limit=100),
-                "autonomy": autonomy_rows,
+                "autonomy": self._autonomy_cache_rows,
             }
             client.set("her:scheduler:state", json.dumps(payload))
         except Exception:  # noqa: BLE001
@@ -1335,7 +1355,8 @@ class TaskScheduler:
         except Exception:  # noqa: BLE001
             return
 
-    def _redis_client(self) -> Any:
+    @staticmethod
+    def _build_redis_client() -> Any:
         try:
             import redis
 
@@ -1347,6 +1368,11 @@ class TaskScheduler:
             )
         except Exception:  # noqa: BLE001
             return None
+
+    def _redis_client(self) -> Any:
+        if self._redis_cached is None:
+            self._redis_cached = self._build_redis_client()
+        return self._redis_cached
 
 
 _scheduler: TaskScheduler | None = None

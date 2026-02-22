@@ -183,31 +183,33 @@ def render_plotly_bar(df: pd.DataFrame, x: str, y: str, title: str = "") -> None
     st.plotly_chart(fig, use_container_width=True)
 
 
-def get_metrics(redis_client):
-    if not redis_client:
+@st.cache_data(ttl=5, show_spinner=False)
+def get_metrics(_redis_client):
+    if not _redis_client:
         return {}
     try:
         return {
-            "total_tokens": int(redis_client.get("her:metrics:tokens") or 0),
-            "total_messages": int(redis_client.get("her:metrics:messages") or 0),
-            "unique_users": int(redis_client.scard("her:metrics:users") or 0),
-            "last_response": redis_client.get("her:metrics:last_response"),
-            "events": _safe_lrange(redis_client, "her:metrics:events", 0, 199),
-            "logs": _safe_lrange(redis_client, "her:logs", 0, 399),
-            "sandbox_executions": _safe_lrange(redis_client, "her:sandbox:executions", 0, 199),
-            "scheduled_jobs": _safe_lrange(redis_client, "her:scheduler:jobs", 0, 199),
-            "decision_logs": _safe_lrange(redis_client, "her:decision:logs", 0, 499),
+            "total_tokens": int(_redis_client.get("her:metrics:tokens") or 0),
+            "total_messages": int(_redis_client.get("her:metrics:messages") or 0),
+            "unique_users": int(_redis_client.scard("her:metrics:users") or 0),
+            "last_response": _redis_client.get("her:metrics:last_response"),
+            "events": _safe_lrange(_redis_client, "her:metrics:events", 0, 199),
+            "logs": _safe_lrange(_redis_client, "her:logs", 0, 399),
+            "sandbox_executions": _safe_lrange(_redis_client, "her:sandbox:executions", 0, 199),
+            "scheduled_jobs": _safe_lrange(_redis_client, "her:scheduler:jobs", 0, 199),
+            "decision_logs": _safe_lrange(_redis_client, "her:decision:logs", 0, 499),
         }
     except Exception as exc:  # noqa: BLE001
         st.warning(f"Error fetching metrics: {exc}")
         return {}
 
 
-def get_runtime_capabilities(redis_client) -> dict[str, Any]:
-    if not redis_client:
+@st.cache_data(ttl=5, show_spinner=False)
+def get_runtime_capabilities(_redis_client) -> dict[str, Any]:
+    if not _redis_client:
         return {}
     try:
-        raw = redis_client.get("her:runtime:capabilities")
+        raw = _redis_client.get("her:runtime:capabilities")
         if not raw:
             return {}
         payload = json.loads(raw)
@@ -217,11 +219,12 @@ def get_runtime_capabilities(redis_client) -> dict[str, Any]:
         return {}
 
 
-def get_runtime_capability_history(redis_client) -> list[dict[str, Any]]:
-    if not redis_client:
+@st.cache_data(ttl=5, show_spinner=False)
+def get_runtime_capability_history(_redis_client) -> list[dict[str, Any]]:
+    if not _redis_client:
         return []
     try:
-        rows = redis_client.lrange("her:runtime:capabilities:history", 0, 99)
+        rows = _redis_client.lrange("her:runtime:capabilities:history", 0, 99)
         snapshots: list[dict[str, Any]] = []
         for row in rows:
             payload = safe_json(row)
@@ -235,11 +238,12 @@ def get_runtime_capability_history(redis_client) -> list[dict[str, Any]]:
         return []
 
 
-def get_scheduler_state(redis_client) -> dict[str, Any]:
-    if not redis_client:
+@st.cache_data(ttl=5, show_spinner=False)
+def get_scheduler_state(_redis_client) -> dict[str, Any]:
+    if not _redis_client:
         return {}
     try:
-        raw = redis_client.get("her:scheduler:state")
+        raw = _redis_client.get("her:scheduler:state")
         if not raw:
             return {}
         payload = json.loads(raw)
@@ -249,11 +253,12 @@ def get_scheduler_state(redis_client) -> dict[str, Any]:
         return {}
 
 
-def get_user_timezone_stats(pg_conn) -> list[dict[str, Any]]:
-    if not pg_conn:
+@st.cache_data(ttl=15, show_spinner=False)
+def get_user_timezone_stats(_pg_conn) -> list[dict[str, Any]]:
+    if not _pg_conn:
         return []
     try:
-        cursor = pg_conn.cursor()
+        cursor = _pg_conn.cursor()
         cursor.execute(
             """
             SELECT
@@ -504,16 +509,22 @@ def parse_autonomy_updates(decision_rows: list[str]) -> pd.DataFrame:
     return df
 
 
-def get_recent_chats(redis_client, limit: int = 200) -> list[dict[str, Any]]:
-    if not redis_client:
+@st.cache_data(ttl=10, show_spinner=False)
+def get_recent_chats(_redis_client, limit: int = 200) -> list[dict[str, Any]]:
+    if not _redis_client:
         return []
     try:
         chats: list[dict[str, Any]] = []
-        for key in redis_client.scan_iter(match="her:context:*", count=500):
-            size = _context_message_count(redis_client, key)
+        scanned = 0
+        scan_cap = max(limit * 4, 400)
+        for key in _redis_client.scan_iter(match="her:context:*", count=500):
+            scanned += 1
+            if scanned > scan_cap:
+                break
+            size = _context_message_count(_redis_client, key)
             if size <= 0:
                 continue
-            head = _context_entries(redis_client, key, limit=3)
+            head = _context_entries(_redis_client, key, limit=3)
             last_role = "unknown"
             last_message = ""
             for raw in head:
@@ -541,8 +552,9 @@ def get_recent_chats(redis_client, limit: int = 200) -> list[dict[str, Any]]:
         return []
 
 
-def get_short_memory_stats(redis_client, recent_chats: list[dict[str, Any]]) -> dict[str, Any]:
-    if not redis_client:
+@st.cache_data(ttl=10, show_spinner=False)
+def get_short_memory_stats(_redis_client, recent_chats: list[dict[str, Any]]) -> dict[str, Any]:
+    if not _redis_client:
         return {}
     try:
         total_threads = len(recent_chats)
@@ -555,7 +567,7 @@ def get_short_memory_stats(redis_client, recent_chats: list[dict[str, Any]]) -> 
         for item in recent_chats[:100]:
             sample_checked += 1
             key = item["context_key"]
-            for parsed in _context_entries(redis_client, key, limit=20):
+            for parsed in _context_entries(_redis_client, key, limit=20):
                 role_counts[str(parsed.get("role", "unknown"))] += 1
 
         top_threads = pd.DataFrame(recent_chats[:20]) if recent_chats else pd.DataFrame()
@@ -573,11 +585,12 @@ def get_short_memory_stats(redis_client, recent_chats: list[dict[str, Any]]) -> 
         return {}
 
 
-def get_memory_stats(pg_conn):
-    if not pg_conn:
+@st.cache_data(ttl=15, show_spinner=False)
+def get_memory_stats(_pg_conn):
+    if not _pg_conn:
         return {}
     try:
-        cursor = pg_conn.cursor()
+        cursor = _pg_conn.cursor()
         cursor.execute(
             """
             SELECT column_name
@@ -719,7 +732,7 @@ def get_memory_stats(pg_conn):
         }
     except Exception as exc:  # noqa: BLE001
         try:
-            pg_conn.rollback()
+            _pg_conn.rollback()
         except Exception:
             pass
         st.warning(f"Error fetching memory stats: {exc}")

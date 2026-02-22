@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 from datetime import datetime, timezone
 from typing import Any
 
@@ -14,6 +15,14 @@ class DecisionLogger:
 
     def __init__(self) -> None:
         self._redis_client = None
+        self._postgres_enabled = str(os.getenv("HER_DECISION_LOG_POSTGRES_ENABLED", "true")).strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        self._postgres_failures = 0
+        self._postgres_backoff_until = 0.0
         try:
             import redis
 
@@ -55,6 +64,10 @@ class DecisionLogger:
             logger.debug("Decision logger Redis write failed: %s", exc)
 
     def _write_postgres(self, payload: dict[str, Any]) -> None:
+        if not self._postgres_enabled:
+            return
+        if time.monotonic() < self._postgres_backoff_until:
+            return
         try:
             import psycopg2
 
@@ -94,5 +107,10 @@ class DecisionLogger:
                         )
             finally:
                 connection.close()
+            self._postgres_failures = 0
+            self._postgres_backoff_until = 0.0
         except Exception as exc:  # noqa: BLE001
+            self._postgres_failures += 1
+            backoff_seconds = min(60, 2 ** min(self._postgres_failures, 6))
+            self._postgres_backoff_until = time.monotonic() + float(backoff_seconds)
             logger.debug("Decision logger Postgres write skipped: %s", exc)

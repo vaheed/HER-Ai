@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -130,9 +131,15 @@ class WorkflowEventHub:
         self._executions: dict[str, ExecutionState] = {}
         self._execution_order: deque[str] = deque(maxlen=max_executions)
         self._clients: set[web.WebSocketResponse] = set()
-        self._queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        queue_max_size = max(200, int(os.getenv("HER_WORKFLOW_EVENT_QUEUE_MAX_SIZE", "5000")))
+        self._queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=queue_max_size)
         self._broadcaster_task: asyncio.Task[Any] | None = None
         self._redis_client = self._build_redis_client()
+        self._state_persisted_at: dict[str, float] = {}
+        self._state_persist_interval_seconds = max(
+            1.0,
+            float(os.getenv("HER_WORKFLOW_STATE_PERSIST_INTERVAL_SECONDS", "2.0")),
+        )
 
     @staticmethod
     def _build_redis_client() -> Any:
@@ -221,7 +228,7 @@ class WorkflowEventHub:
         try:
             self._queue.put_nowait(event)
         except Exception:
-            logger.debug("Failed to enqueue workflow event", exc_info=True)
+            logger.debug("Workflow event queue full; dropping event", exc_info=True)
 
     def snapshot(self, limit: int = 30) -> dict[str, Any]:
         execution_ids = list(self._execution_order)[: max(1, int(limit))]
@@ -262,11 +269,17 @@ class WorkflowEventHub:
             serialized = json.dumps(event)
             self._redis_client.lpush("her:workflow:events", serialized)
             self._redis_client.ltrim("her:workflow:events", 0, 1999)
-            self._redis_client.set(
-                f"her:workflow:execution:{state.execution_id}",
-                json.dumps(state.to_dict()),
-                ex=24 * 3600,
-            )
+            now_mono = time.monotonic()
+            event_type = str(event.get("event_type", ""))
+            should_persist_state = event_type in {"response_sent", "error", "llm_completed", "tool_completed"}
+            last_persisted = self._state_persisted_at.get(state.execution_id, 0.0)
+            if should_persist_state or (now_mono - last_persisted >= self._state_persist_interval_seconds):
+                self._redis_client.set(
+                    f"her:workflow:execution:{state.execution_id}",
+                    json.dumps(state.to_dict()),
+                    ex=24 * 3600,
+                )
+                self._state_persisted_at[state.execution_id] = now_mono
         except Exception:
             logger.debug("Failed to persist workflow event", exc_info=True)
 

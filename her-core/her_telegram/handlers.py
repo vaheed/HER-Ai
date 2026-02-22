@@ -232,6 +232,8 @@ class MessageHandlers:
         self._metrics: HERMetrics | None = None
         self._language_cache: dict[int, tuple[str, float]] = {}
         self._llm_stream_event_counter: dict[str, int] = {}
+        self._online_utc_cache: tuple[datetime | None, float] = (None, 0.0)
+        self._btc_price_cache: tuple[float | None, float] = (None, 0.0)
         try:
             self._autonomy.ensure_tables()
             self._metrics = HERMetrics(
@@ -770,18 +772,28 @@ class MessageHandlers:
         )
 
     def _fetch_online_utc_now(self) -> datetime | None:
+        cached_dt, cached_at = self._online_utc_cache
+        now_mono = time.monotonic()
+        if cached_dt is not None and now_mono - cached_at <= 30:
+            return cached_dt
         try:
             with urlopen("https://worldtimeapi.org/api/timezone/Etc/UTC", timeout=10) as response:
                 payload = json.loads(response.read().decode("utf-8"))
             utc_datetime = payload.get("utc_datetime")
             if not utc_datetime:
                 return None
-            return datetime.fromisoformat(utc_datetime.replace("Z", "+00:00")).astimezone(UTC)
+            parsed = datetime.fromisoformat(utc_datetime.replace("Z", "+00:00")).astimezone(UTC)
+            self._online_utc_cache = (parsed, now_mono)
+            return parsed
         except (URLError, TimeoutError, json.JSONDecodeError, ValueError) as exc:
             logger.debug("UTC time lookup failed: %s", exc)
             return None
 
     def _fetch_btc_price_usd(self) -> float | None:
+        cached_price, cached_at = self._btc_price_cache
+        now_mono = time.monotonic()
+        if cached_price is not None and now_mono - cached_at <= 20:
+            return cached_price
         endpoints = [
             ("https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd", lambda p: p.get("bitcoin", {}).get("usd")),
             ("https://api.coinbase.com/v2/prices/BTC-USD/spot", lambda p: p.get("data", {}).get("amount")),
@@ -792,7 +804,9 @@ class MessageHandlers:
                     payload = json.loads(response.read().decode("utf-8"))
                 usd_price = extractor(payload)
                 if usd_price is not None:
-                    return float(usd_price)
+                    parsed = float(usd_price)
+                    self._btc_price_cache = (parsed, now_mono)
+                    return parsed
             except (URLError, TimeoutError, json.JSONDecodeError, ValueError) as exc:
                 logger.debug("BTC price lookup failed for %s: %s", endpoint, exc)
         return None
@@ -3051,7 +3065,7 @@ class MessageHandlers:
                     user_id=str(user_id),
                     message=message,
                     language=user_language,
-                    user_context=self.memory.get_context(str(user_id)),
+                    user_context=previous_context,
                     group_context=[],
                     memories=related_memories,
                     live_context=live_context,
@@ -3408,7 +3422,7 @@ class MessageHandlers:
                     user_id=str(user_id),
                     message=message,
                     language=user_language,
-                    user_context=self.memory.get_context(str(user_id)),
+                    user_context=previous_context,
                     group_context=group_context,
                     memories=related_memories,
                     live_context=live_context,

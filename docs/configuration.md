@@ -44,6 +44,8 @@ Configuration is driven by environment variables in `.env` and YAML files under 
 | `WORKFLOW_DEBUG_SERVER_ENABLED` | `true` | Enable realtime workflow DAG server |
 | `WORKFLOW_DEBUG_HOST` | `0.0.0.0` | Workflow debug server bind host |
 | `WORKFLOW_DEBUG_PORT` | `8081` | Workflow debug server port |
+| `HER_WORKFLOW_EVENT_QUEUE_MAX_SIZE` | `5000` | Max buffered workflow events before drop-backpressure |
+| `HER_WORKFLOW_STATE_PERSIST_INTERVAL_SECONDS` | `2.0` | Minimum interval for persisting full workflow execution snapshots |
 | `API_ADAPTER_ENABLED` | `true` | Enable HTTP OpenAPI adapter |
 | `API_ADAPTER_HOST` | `0.0.0.0` | OpenAPI adapter bind host |
 | `API_ADAPTER_PORT` | `8082` | OpenAPI adapter port |
@@ -62,6 +64,8 @@ Configuration is driven by environment variables in `.env` and YAML files under 
 | `HER_SANDBOX_MEMORY_LIMIT_MB` | `512` | Sandbox memory cap |
 | `HER_PROACTIVE_MESSAGES_ENABLED` | `false` | Enable scheduler-driven proactive follow-up/check-in messages |
 | `SCHEDULER_DATABASE_URL` | `` | APScheduler SQLAlchemy job-store URL (defaults to PostgreSQL env values) |
+| `HER_SCHEDULER_STATE_PUBLISH_MIN_INTERVAL_SECONDS` | `10` | Minimum interval between scheduler state publish operations |
+| `HER_SCHEDULER_AUTONOMY_CACHE_TTL_SECONDS` | `60` | Cache TTL for scheduler autonomy snapshot aggregation |
 | `MCP_CONFIG_PATH` | `mcp_servers.yaml` | MCP profile file name |
 | `MCP_SERVER_START_TIMEOUT_SECONDS` | `60` | Timeout per MCP server startup |
 | `SANDBOX_CONTAINER_NAME` | `her-sandbox` | Container target for sandbox tools |
@@ -70,6 +74,7 @@ Configuration is driven by environment variables in `.env` and YAML files under 
 | `HER_CONFIG_DIR` | `/app/config` | Runtime config directory override |
 | `DOCKER_GID` | `998` | Optional docker group id when non-root runtime |
 | `BRAVE_API_KEY` | - | Optional Brave Search MCP key |
+| `HER_DECISION_LOG_POSTGRES_ENABLED` | `true` | Toggle SQL writes for decision logs (Redis logging remains enabled) |
 
 ## YAML Configuration Files
 

@@ -65,6 +65,8 @@ Configuration is driven by environment variables in `.env` and YAML files under 
 | `MCP_CONFIG_PATH` | `mcp_servers.yaml` | MCP profile file name |
 | `MCP_SERVER_START_TIMEOUT_SECONDS` | `60` | Timeout per MCP server startup |
 | `SANDBOX_CONTAINER_NAME` | `her-sandbox` | Container target for sandbox tools |
+| `HER_SANDBOX_PRECHECK_HOST_BINARIES` | `false` | If true, checks command binary availability on host before docker exec (usually keep false) |
+| `HER_ENABLE_LIVE_WEB_CONTEXT` | `false` | Enables web search enrichment inside chat prompt pipeline (higher latency) |
 | `HER_CONFIG_DIR` | `/app/config` | Runtime config directory override |
 | `DOCKER_GID` | `998` | Optional docker group id when non-root runtime |
 | `BRAVE_API_KEY` | - | Optional Brave Search MCP key |

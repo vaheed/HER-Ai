@@ -230,6 +230,8 @@ class MessageHandlers:
         self._autonomy = AutonomyService()
         self._workflow_event_hub = workflow_event_hub
         self._metrics: HERMetrics | None = None
+        self._language_cache: dict[int, tuple[str, float]] = {}
+        self._llm_stream_event_counter: dict[str, int] = {}
         try:
             self._autonomy.ensure_tables()
             self._metrics = HERMetrics(
@@ -251,16 +253,45 @@ class MessageHandlers:
     ) -> None:
         if not execution_id or not self._workflow_event_hub:
             return
+        if event_type == "llm_stream_token":
+            count = self._llm_stream_event_counter.get(execution_id, 0) + 1
+            self._llm_stream_event_counter[execution_id] = count
+            # Emit every 25th token event to keep workflow websocket responsive.
+            if count % 25 != 0:
+                return
+        if event_type == "response_sent":
+            self._llm_stream_event_counter.pop(execution_id, None)
         try:
+            sanitized_details = self._sanitize_event_details(details or {})
             self._workflow_event_hub.emit(
                 event_type=event_type,
                 execution_id=execution_id,
                 node_id=node_id,
                 status=status,
-                details=details or {},
+                details=sanitized_details,
             )
         except Exception as exc:  # noqa: BLE001
             logger.debug("Workflow event emit failed: %s", exc)
+
+    def _sanitize_event_details(self, details: dict[str, Any]) -> dict[str, Any]:
+        sanitized: dict[str, Any] = {}
+        for key, value in details.items():
+            if key == "raw_messages" and isinstance(value, list):
+                compact_rows = []
+                for row in value[:4]:
+                    text = str(row)
+                    compact_rows.append(text[:900] + ("..." if len(text) > 900 else ""))
+                sanitized[key] = compact_rows
+                continue
+            if key in {"tool_output", "tool_error"}:
+                text = str(value)
+                sanitized[key] = text[-1800:] if len(text) > 1800 else text
+                continue
+            if isinstance(value, str):
+                sanitized[key] = value[:500] + ("..." if len(value) > 500 else "")
+                continue
+            sanitized[key] = value
+        return sanitized
 
     def is_admin(self, user_id: int) -> bool:
         return user_id in self.admin_user_ids
@@ -826,8 +857,10 @@ class MessageHandlers:
 
     def _sandbox_capability(self) -> tuple[bool, str]:
         caps = self._get_runtime_capabilities()
+        if not caps:
+            return True, "runtime capability snapshot missing; allowing sandbox by default"
         sandbox = (caps.get("capabilities", {}) or {}).get("sandbox", {}) if caps else {}
-        available = bool(sandbox.get("available"))
+        available = bool(sandbox.get("available", True))
         reason = str(sandbox.get("reason", "unknown"))
         return available, reason
 
@@ -1096,6 +1129,20 @@ class MessageHandlers:
         return "en"
 
     def _detect_user_language(self, message: str, user_id: int, context_rows: list[dict[str, Any]]) -> str:
+        now_ts = time.time()
+        cached = self._language_cache.get(user_id)
+        if cached and now_ts - cached[1] <= 1800:
+            return cached[0]
+
+        heuristic = self._detect_language_heuristic(message)
+        if heuristic != "en":
+            self._language_cache[user_id] = (heuristic, now_ts)
+            return heuristic
+        # Avoid expensive LLM calls for clear/long English messages.
+        if len(message.strip()) >= 24:
+            self._language_cache[user_id] = (heuristic, now_ts)
+            return heuristic
+
         history_text = self._history_for_llm(context_rows, limit=60)
         prompt = (
             "Detect the language of the latest user message.\n"
@@ -1114,10 +1161,12 @@ class MessageHandlers:
             payload = self._extract_json_object(response_text)
             language = str((payload or {}).get("language", "")).strip().lower()
             if re.match(r"^[a-z]{2}$", language):
+                self._language_cache[user_id] = (language, now_ts)
                 return language
         except Exception as exc:  # noqa: BLE001
             logger.debug("Language detection via LLM failed for user %s: %s", user_id, exc)
-        return self._detect_language_heuristic(message)
+        self._language_cache[user_id] = (heuristic, now_ts)
+        return heuristic
 
     def _build_scheduler_confirmation(
         self,
@@ -1924,11 +1973,13 @@ class MessageHandlers:
             if usd_price is not None:
                 snippets.append(f"Live market data: Bitcoin (BTC) price is about ${usd_price:,.2f} USD.")
 
+        live_web_enabled = os.getenv("HER_ENABLE_LIVE_WEB_CONTEXT", "false").strip().lower() in {"1", "true", "yes", "on"}
         needs_web_search = any(
             token in lower_msg
             for token in {"today", "current", "latest", "right now", "price", "news", "internet", "search"}
         )
-        if needs_web_search:
+        internet_available = bool((internet or {}).get("available", True))
+        if live_web_enabled and needs_web_search and internet_available:
             search_result = self._web_search_tool._run(message, max_results=3)
             if not search_result.lower().startswith("web search failed"):
                 snippets.append(f"Fresh web context:\n{search_result}")
@@ -2895,41 +2946,59 @@ class MessageHandlers:
                         context_rows=previous_context,
                     )
                     response_parts: list[str] = []
-                    existing_names = {str(t.get("name", "")) for t in self.scheduler.get_tasks()}
-                    for task in all_scheduled_tasks:
-                        task_name = str(task.get("name", "task"))
-                        if task_name in existing_names:
-                            task_name = f"{task_name}_{int(datetime.now(UTC).timestamp())}"
-                            task["name"] = task_name
-                        existing_names.add(task_name)
-                        self.scheduler.add_task(
-                            name=task_name,
-                            interval=str(task.get("interval", "once")),
-                            task_type=str(task.get("type", "reminder")),
-                            enabled=bool(task.get("enabled", True)),
-                            **{k: v for k, v in task.items() if k not in {"name", "interval", "type", "enabled"}},
-                        )
-                        response_parts.append(
-                            self._build_scheduler_confirmation(
-                                user_id=user_id,
-                                language=user_language,
-                                original_request=message,
-                                task=task,
-                                context_rows=previous_context,
+                    created_task_count = 0
+                    ok = True
+                    details = "no tasks created"
+                    if all_scheduled_tasks:
+                        created_task_count = len(all_scheduled_tasks)
+                        existing_names = {str(t.get("name", "")) for t in self.scheduler.get_tasks()}
+                        for task in all_scheduled_tasks:
+                            task_name = str(task.get("name", "task"))
+                            if task_name in existing_names:
+                                task_name = f"{task_name}_{int(datetime.now(UTC).timestamp())}"
+                                task["name"] = task_name
+                            existing_names.add(task_name)
+                            self.scheduler.add_task(
+                                name=task_name,
+                                interval=str(task.get("interval", "once")),
+                                task_type=str(task.get("type", "reminder")),
+                                enabled=bool(task.get("enabled", True)),
+                                **{k: v for k, v in task.items() if k not in {"name", "interval", "type", "enabled"}},
                             )
+                            response_parts.append(
+                                self._build_scheduler_confirmation(
+                                    user_id=user_id,
+                                    language=user_language,
+                                    original_request=message,
+                                    task=task,
+                                    context_rows=previous_context,
+                                )
+                            )
+                        ok, details = self.scheduler.persist_tasks()
+                    else:
+                        fallback_confirmation = self._maybe_schedule_from_message(
+                            message=message,
+                            user_id=user_id,
+                            chat_id=chat_id,
+                            user_timezone=user_timezone,
                         )
-                    ok, details = self.scheduler.persist_tasks()
+                        if fallback_confirmation:
+                            response_parts.append(fallback_confirmation)
+                            created_task_count = 1
+                            ok, details = True, "created via deterministic fallback parser"
+                        else:
+                            ok, details = False, "could not infer a valid schedule task from request"
                     self._log_stage_timing(
                         user_id,
                         "scheduler",
                         scheduler_start,
-                        {"created_tasks": len(all_scheduled_tasks), "persisted": ok},
+                        {"created_tasks": created_task_count, "persisted": ok},
                     )
                     if not ok:
                         response_parts.append(f"Scheduler persistence is degraded: {details}")
                     response = "\n".join(part for part in response_parts if part).strip()
-                    schedule_count = len(all_scheduled_tasks)
-                    task_succeeded = ok or bool(all_scheduled_tasks)
+                    schedule_count = created_task_count
+                    task_succeeded = ok and created_task_count > 0
                 else:
                     self._emit_workflow_event(
                         execution_id=execution_id,
@@ -3233,41 +3302,59 @@ class MessageHandlers:
                         context_rows=previous_context,
                     )
                     response_parts: list[str] = []
-                    existing_names = {str(t.get("name", "")) for t in self.scheduler.get_tasks()}
-                    for task in all_scheduled_tasks:
-                        task_name = str(task.get("name", "task"))
-                        if task_name in existing_names:
-                            task_name = f"{task_name}_{int(datetime.now(UTC).timestamp())}"
-                            task["name"] = task_name
-                        existing_names.add(task_name)
-                        self.scheduler.add_task(
-                            name=task_name,
-                            interval=str(task.get("interval", "once")),
-                            task_type=str(task.get("type", "reminder")),
-                            enabled=bool(task.get("enabled", True)),
-                            **{k: v for k, v in task.items() if k not in {"name", "interval", "type", "enabled"}},
-                        )
-                        response_parts.append(
-                            self._build_scheduler_confirmation(
-                                user_id=user_id,
-                                language=user_language,
-                                original_request=message,
-                                task=task,
-                                context_rows=previous_context,
+                    created_task_count = 0
+                    ok = True
+                    details = "no tasks created"
+                    if all_scheduled_tasks:
+                        created_task_count = len(all_scheduled_tasks)
+                        existing_names = {str(t.get("name", "")) for t in self.scheduler.get_tasks()}
+                        for task in all_scheduled_tasks:
+                            task_name = str(task.get("name", "task"))
+                            if task_name in existing_names:
+                                task_name = f"{task_name}_{int(datetime.now(UTC).timestamp())}"
+                                task["name"] = task_name
+                            existing_names.add(task_name)
+                            self.scheduler.add_task(
+                                name=task_name,
+                                interval=str(task.get("interval", "once")),
+                                task_type=str(task.get("type", "reminder")),
+                                enabled=bool(task.get("enabled", True)),
+                                **{k: v for k, v in task.items() if k not in {"name", "interval", "type", "enabled"}},
                             )
+                            response_parts.append(
+                                self._build_scheduler_confirmation(
+                                    user_id=user_id,
+                                    language=user_language,
+                                    original_request=message,
+                                    task=task,
+                                    context_rows=previous_context,
+                                )
+                            )
+                        ok, details = self.scheduler.persist_tasks()
+                    else:
+                        fallback_confirmation = self._maybe_schedule_from_message(
+                            message=message,
+                            user_id=user_id,
+                            chat_id=chat_id,
+                            user_timezone=user_timezone,
                         )
-                    ok, details = self.scheduler.persist_tasks()
+                        if fallback_confirmation:
+                            response_parts.append(fallback_confirmation)
+                            created_task_count = 1
+                            ok, details = True, "created via deterministic fallback parser"
+                        else:
+                            ok, details = False, "could not infer a valid schedule task from request"
                     self._log_stage_timing(
                         user_id,
                         "scheduler",
                         scheduler_start,
-                        {"created_tasks": len(all_scheduled_tasks), "persisted": ok},
+                        {"created_tasks": created_task_count, "persisted": ok},
                     )
                     if not ok:
                         response_parts.append(f"Scheduler persistence is degraded: {details}")
                     response = "\n".join(part for part in response_parts if part).strip()
-                    schedule_count = len(all_scheduled_tasks)
-                    task_succeeded = ok or bool(all_scheduled_tasks)
+                    schedule_count = created_task_count
+                    task_succeeded = ok and created_task_count > 0
                 else:
                     self._emit_workflow_event(
                         execution_id=execution_id,

@@ -107,12 +107,6 @@ class SandboxExecutor:
         Returns:
             Dict with success, output, error, exit_code, execution_time
         """
-        missing_binary = self._detect_missing_binary(command)
-        if missing_binary:
-            result = self._binary_missing_result(missing_binary)
-            self._log_execution(command, result, user, workdir)
-            return result
-
         if not self._can_use_docker():
             result = {
                 "success": False,
@@ -123,6 +117,18 @@ class SandboxExecutor:
             }
             self._log_execution(command, result, user, workdir)
             return result
+        precheck_host_binaries = os.getenv("HER_SANDBOX_PRECHECK_HOST_BINARIES", "false").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        if precheck_host_binaries:
+            missing_binary = self._detect_missing_binary(command)
+            if missing_binary:
+                result = self._binary_missing_result(missing_binary)
+                self._log_execution(command, result, user, workdir)
+                return result
         try:
             return self._execute_via_docker(
                 command=command,
@@ -210,10 +216,6 @@ class SandboxExecutor:
         on_stderr_line: Any | None = None,
     ) -> dict[str, Any]:
         """Execute command in sandbox and stream stdout/stderr line-by-line."""
-        missing_binary = self._detect_missing_binary(command)
-        if missing_binary:
-            return self._binary_missing_result(missing_binary)
-
         if not self._can_use_docker():
             return {
                 "success": False,
@@ -222,6 +224,16 @@ class SandboxExecutor:
                 "exit_code": -1,
                 "execution_time": 0.0,
             }
+        precheck_host_binaries = os.getenv("HER_SANDBOX_PRECHECK_HOST_BINARIES", "false").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        if precheck_host_binaries:
+            missing_binary = self._detect_missing_binary(command)
+            if missing_binary:
+                return self._binary_missing_result(missing_binary)
 
         start_time = time.time()
         stdout_lines: list[str] = []

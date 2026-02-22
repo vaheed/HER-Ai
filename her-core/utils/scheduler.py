@@ -15,6 +15,7 @@ import random
 import re
 import ast
 import asyncio
+import contextlib
 import threading
 import time
 from dataclasses import dataclass
@@ -1405,6 +1406,26 @@ class TaskScheduler:
                 self._publish_scheduler_state()
                 return True
         return False
+
+    def remove_task(self, name: str) -> bool:
+        target = str(name or "").strip()
+        if not target:
+            return False
+        removed = False
+        retained: list[dict[str, Any]] = []
+        for task in self.tasks:
+            if str(task.get("name", "")).strip() == target:
+                removed = True
+                continue
+            retained.append(task)
+        if not removed:
+            return False
+        self.tasks = retained
+        if self._scheduler is not None:
+            with contextlib.suppress(Exception):
+                self._scheduler.remove_job(f"task:{target}")
+        self._publish_scheduler_state()
+        return True
 
     def get_tasks(self) -> list[dict[str, Any]]:
         return [dict(item) for item in self.tasks]

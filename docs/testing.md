@@ -26,6 +26,26 @@ pytest tests/test_smoke.py -q
 pytest tests/test_runtime_guards.py -q
 ```
 
+Docker runtime integration (Python 3.11 runtime inside `her-bot`):
+
+```bash
+# Option A: use existing running stack
+RUN_DOCKER_INTEGRATION=1 pytest tests/integration/test_docker_runtime_e2e.py -q
+
+# Option B: let test autostart compose stack
+RUN_DOCKER_INTEGRATION=1 HER_E2E_AUTOSTART_STACK=1 pytest tests/integration/test_docker_runtime_e2e.py -q
+
+# Option C: lightweight E2E compose profile (no Ollama services)
+RUN_DOCKER_INTEGRATION=1 \
+HER_E2E_AUTOSTART_STACK=1 \
+HER_E2E_COMPOSE_FILES=docker-compose.yml:tests/integration/docker-compose.e2e.yml \
+HER_E2E_SERVICES="postgres redis sandbox her-bot" \
+pytest tests/integration/test_docker_runtime_e2e.py -q
+```
+
+Optional integration flags:
+- `HER_E2E_KEEP_STACK=true|false` controls teardown when autostart is enabled.
+
 ## Runtime Validation (Container Stack)
 
 ```bash

@@ -81,6 +81,15 @@ _CRITICISM_PATTERN = re.compile(
     r"(چرا چرت|اشتباه|مزخرف|nonsense|wrong|you are wrong|bad answer)",
     re.IGNORECASE,
 )
+_SCHEDULE_MUTATION_PATTERN = re.compile(
+    r"\b(remove|delete|cancel|disable|pause|enable|resume)\b.*\b(task|schedule|reminder)\b",
+    re.IGNORECASE,
+)
+_TASK_NAME_CAPTURE_PATTERNS = [
+    re.compile(r"\b(?:task|schedule|reminder)\s+([a-zA-Z0-9_.:-]+)\b", re.IGNORECASE),
+    re.compile(r"\bnamed\s+([a-zA-Z0-9_.:-]+)\b", re.IGNORECASE),
+    re.compile(r"\bname\s+it\s+([a-zA-Z0-9_.:-]+)\b", re.IGNORECASE),
+]
 _WEEKDAY_TO_INDEX = {
     "monday": 0,
     "tuesday": 1,
@@ -1828,6 +1837,75 @@ class MessageHandlers:
         return confirmation
 
     @staticmethod
+    def _extract_named_task(message: str) -> str | None:
+        text = str(message or "").strip()
+        for pattern in _TASK_NAME_CAPTURE_PATTERNS:
+            match = pattern.search(text)
+            if match:
+                return str(match.group(1)).strip()
+        return None
+
+    def _maybe_apply_schedule_mutation(self, message: str) -> str | None:
+        if not self.scheduler:
+            return None
+        lower = str(message or "").lower()
+        if not _SCHEDULE_MUTATION_PATTERN.search(lower):
+            return None
+        task_name = self._extract_named_task(message)
+        if not task_name:
+            return "Please specify a task name (example: `remove task btc_watch_123`)."
+
+        if any(token in lower for token in ("remove", "delete", "cancel")):
+            removed = self.scheduler.remove_task(task_name)
+            if not removed:
+                return f"I couldn't find a task named `{task_name}`."
+            ok, details = self.scheduler.persist_tasks()
+            if ok:
+                return f"Removed scheduled task `{task_name}`."
+            return f"Removed `{task_name}` in memory, but persistence is degraded ({details})."
+
+        if any(token in lower for token in ("disable", "pause")):
+            updated = self.scheduler.set_task_enabled(task_name, False)
+            if not updated:
+                return f"I couldn't find a task named `{task_name}`."
+            ok, details = self.scheduler.persist_tasks()
+            if ok:
+                return f"Disabled scheduled task `{task_name}`."
+            return f"Disabled `{task_name}` in memory, but persistence is degraded ({details})."
+
+        if any(token in lower for token in ("enable", "resume")):
+            updated = self.scheduler.set_task_enabled(task_name, True)
+            if not updated:
+                return f"I couldn't find a task named `{task_name}`."
+            ok, details = self.scheduler.persist_tasks()
+            if ok:
+                return f"Enabled scheduled task `{task_name}`."
+            return f"Enabled `{task_name}` in memory, but persistence is degraded ({details})."
+
+        return None
+
+    def _maybe_handle_direct_runtime_request(
+        self,
+        message: str,
+        user_id: int,
+    ) -> tuple[str, str, int, bool] | None:
+        mutation = self._maybe_apply_schedule_mutation(message)
+        if mutation:
+            success = "couldn't find" not in mutation.lower()
+            return mutation, ACTION_MODE, 0, success
+
+        security = self._maybe_answer_sandbox_security_query(message)
+        if security:
+            success = "failed" not in security.lower() and "unavailable" not in security.lower()
+            return security, ACTION_MODE, 0, success
+
+        realtime = self._maybe_answer_realtime_query(message)
+        if realtime:
+            return realtime, CHAT_MODE, 0, True
+
+        return None
+
+    @staticmethod
     def _is_safe_sandbox_command(command: str) -> bool:
         stripped = command.strip()
         if not stripped:
@@ -2919,6 +2997,43 @@ class MessageHandlers:
             }
 
         self.memory.update_context(str(user_id), message, "user")
+        direct_result = self._maybe_handle_direct_runtime_request(message=message, user_id=user_id)
+        if direct_result is not None:
+            direct_response, direct_mode, schedule_count, task_succeeded = direct_result
+            response = self._render_in_user_language(user_id, user_language, direct_response)
+            response = self._sanitize_response_for_policy(
+                response=response,
+                user_message=message,
+                user_language=user_language,
+                previous_assistant_message=previous_assistant_message,
+            )
+            self.memory.update_context(str(user_id), response, "assistant")
+            if self._metrics:
+                self._metrics.record_interaction(str(user_id), message, response)
+            self._record_reinforcement(str(user_id), message, response, task_succeeded=task_succeeded)
+            total_latency_ms = round((time.perf_counter() - request_started_at) * 1000.0, 2)
+            self._emit_workflow_event(
+                execution_id=execution_id,
+                event_type="response_sent",
+                node_id="response",
+                status="success" if task_succeeded else "error",
+                details={
+                    "response_preview": response[:500],
+                    "total_latency_ms": total_latency_ms,
+                    "direct_runtime_handler": True,
+                },
+            )
+            return {
+                "execution_id": execution_id or "",
+                "response": response,
+                "mode": direct_mode,
+                "language": user_language,
+                "scheduled_tasks": schedule_count,
+                "task_succeeded": task_succeeded,
+                "total_latency_ms": total_latency_ms,
+                "debug": debug,
+            }
+
         intent = self._classify_intent(message)
         if self._requires_tool_execution(message):
             intent["mode"] = ACTION_MODE
@@ -3266,6 +3381,36 @@ class MessageHandlers:
         self.memory.update_context(str(user_id), message, "user")
         if is_group:
             self.memory.update_context(group_key, f"{update.effective_user.full_name}: {message}", "user", max_messages=120)
+
+        direct_result = self._maybe_handle_direct_runtime_request(message=message, user_id=user_id)
+        if direct_result is not None:
+            direct_response, _direct_mode, _schedule_count, task_succeeded = direct_result
+            response = self._render_in_user_language(user_id, user_language, direct_response)
+            response = self._sanitize_response_for_policy(
+                response=response,
+                user_message=message,
+                user_language=user_language,
+                previous_assistant_message=previous_assistant_message,
+            )
+            await self._reply_with_typing_effect(update, response[:3900])
+            self.memory.update_context(str(user_id), response, "assistant")
+            if is_group:
+                self.memory.update_context(group_key, f"HER: {response}", "assistant", max_messages=120)
+            if self._metrics:
+                self._metrics.record_interaction(str(user_id), message, response)
+            self._record_reinforcement(str(user_id), message, response, task_succeeded=task_succeeded)
+            self._emit_workflow_event(
+                execution_id=execution_id,
+                event_type="response_sent",
+                node_id="response",
+                status="success" if task_succeeded else "error",
+                details={
+                    "response_preview": response[:500],
+                    "total_latency_ms": round((time.perf_counter() - request_started_at) * 1000.0, 2),
+                    "direct_runtime_handler": True,
+                },
+            )
+            return
 
         if is_group and self.group_reply_on_mention_only and not self._message_mentions_bot(update):
             return

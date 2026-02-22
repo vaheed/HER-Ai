@@ -36,8 +36,33 @@ jobs:
       - name: Run unit tests
         run: pytest -q
 
-  build-push:
+  integration-e2e:
     needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r her-core/requirements.txt
+          pip install pytest
+      - name: Prepare CI env file
+        run: cp .env.example .env
+      - name: Run Docker E2E integration tests
+        env:
+          RUN_DOCKER_INTEGRATION: "1"
+          HER_E2E_AUTOSTART_STACK: "1"
+          HER_E2E_KEEP_STACK: "false"
+          HER_E2E_COMPOSE_FILES: "docker-compose.yml:tests/integration/docker-compose.e2e.yml"
+          HER_E2E_SERVICES: "postgres redis sandbox her-bot"
+        run: pytest tests/integration/test_docker_runtime_e2e.py -q
+
+  build-push:
+    needs: [test, integration-e2e]
     runs-on: ubuntu-latest
     strategy:
       matrix:

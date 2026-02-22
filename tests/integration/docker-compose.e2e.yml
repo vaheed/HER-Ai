@@ -1,0 +1,17 @@
+services:
+  her-bot:
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      sandbox:
+        condition: service_healthy
+    environment:
+      TELEGRAM_ENABLED: "false"
+      API_ADAPTER_ENABLED: "true"
+      WORKFLOW_DEBUG_SERVER_ENABLED: "false"
+      STARTUP_WARMUP_ENABLED: "false"
+      MCP_CONFIG_PATH: "missing_mcp.yaml"
+      MCP_SERVER_START_TIMEOUT_SECONDS: "15"
+      HER_PROACTIVE_MESSAGES_ENABLED: "false"

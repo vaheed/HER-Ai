@@ -66,6 +66,20 @@ _GREETING_PATTERN = re.compile(
     r"^\s*(hello|hi|hey|yo|good morning|good afternoon|good evening|sup|what's up)\b",
     re.IGNORECASE,
 )
+_PROFILE_SETUP_PATTERN = re.compile(
+    r"\b(setup|set up|configure|configuration|personalize|preferences|profile|reset)\b|"
+    r"(تنظیم|پیکربندی|پروفایل|شخصی(?:\s*سازی)?|ریست)",
+    re.IGNORECASE,
+)
+_ONBOARDING_QUESTION_PATTERN = re.compile(
+    r"(what is your name|what should i call you|your timezone|preferred response style|"
+    r"نام شما چیست|چه صدا کنم|منطقه زمانی|سبک پاسخ)",
+    re.IGNORECASE,
+)
+_CRITICISM_PATTERN = re.compile(
+    r"(چرا چرت|اشتباه|مزخرف|nonsense|wrong|you are wrong|bad answer)",
+    re.IGNORECASE,
+)
 _WEEKDAY_TO_INDEX = {
     "monday": 0,
     "tuesday": 1,
@@ -1897,6 +1911,16 @@ class MessageHandlers:
         return (
             "You are HER, a warm emotionally intelligent assistant in Telegram. "
             "Answer naturally and concisely.\n\n"
+            "Production-safe response policy:\n"
+            "- Be predictable, calm, and non-repetitive.\n"
+            "- Never send unsolicited follow-up messages or reminders.\n"
+            "- If the user stops replying, remain silent.\n"
+            "- Always answer the user's message directly before asking anything.\n"
+            "- Ask at most one clarification question and only when required.\n"
+            "- Do not ask onboarding/profile questions unless user explicitly asks for setup/config/reset.\n"
+            "- Do not fabricate prior context.\n"
+            "- If user criticizes the response, apologize briefly once, then adjust.\n"
+            "- Keep language consistent with the user's dominant language.\n\n"
             "Execution posture for actionable requests:\n"
             "- Treat each user request as an objective to complete.\n"
             "- Build a short step-by-step plan before suggesting execution.\n"
@@ -1919,6 +1943,47 @@ class MessageHandlers:
             f"Real-time context:\n{live_context}\n\n"
             f"Current user message: {message}"
         )
+
+    @staticmethod
+    def _user_requested_profile_setup(message: str) -> bool:
+        return bool(_PROFILE_SETUP_PATTERN.search(str(message or "")))
+
+    @staticmethod
+    def _contains_disallowed_onboarding_questions(text: str) -> bool:
+        return bool(_ONBOARDING_QUESTION_PATTERN.search(str(text or "")))
+
+    def _fallback_guardrail_reply(self, language: str) -> str:
+        if language == "fa":
+            return "بدون تنظیمات اولیه هم ادامه می‌دهم. درخواستت را مستقیم می‌گیرم و پاسخ می‌دهم."
+        return "I can continue without setup details and respond directly to your request."
+
+    def _sanitize_response_for_policy(
+        self,
+        *,
+        response: str,
+        user_message: str,
+        user_language: str,
+        previous_assistant_message: str,
+    ) -> str:
+        cleaned = str(response or "").strip()
+        if not cleaned:
+            return self._fallback_guardrail_reply(user_language)
+
+        setup_requested = self._user_requested_profile_setup(user_message)
+        if not setup_requested and self._contains_disallowed_onboarding_questions(cleaned):
+            return self._fallback_guardrail_reply(user_language)
+
+        if previous_assistant_message and cleaned.strip() == previous_assistant_message.strip():
+            if user_language == "fa":
+                return "پاسخ قبلی را تکرار نمی‌کنم. دقیق بگو کدام بخش را می‌خواهی جلو ببریم."
+            return "I won't repeat the same prompt. Tell me the exact part you want to continue."
+
+        if _CRITICISM_PATTERN.search(str(user_message or "")):
+            if user_language == "fa":
+                return "حق با توئه. اشتباه شد. بگو دقیقاً چی می‌خوای تا درستش کنم."
+            return "You are right. That was a miss. Tell me exactly what you want and I'll correct it."
+
+        return cleaned
 
     def _last_assistant_message(self, context_rows: list[dict[str, Any]]) -> str:
         for item in reversed(context_rows):
@@ -2127,27 +2192,6 @@ class MessageHandlers:
         }
         return any(token in lower for token in required_tokens)
 
-    def _profile_needs_onboarding(self, user_id: int) -> bool:
-        profile = self._user_profiles.get_profile(user_id)
-        return not bool(profile.name.strip() or profile.nickname.strip())
-
-    def _onboarding_questions(self, language: str) -> str:
-        if language == "fa":
-            return (
-                "برای شروع چند مورد را بگو:\n"
-                "1) نام شما چیست؟\n"
-                "2) دوست دارید شما را چه صدا کنم؟\n"
-                "3) منطقه زمانی‌تان چیست؟ (مثال: Asia/Tehran)\n"
-                "4) سبک پاسخ‌دهی دلخواه شما چیست؟ (مختصر/تحلیلی/دوستانه)"
-            )
-        return (
-            "Before we continue, share these so I can personalize correctly:\n"
-            "1. What is your name?\n"
-            "2. What should I call you?\n"
-            "3. Your timezone (example: America/Los_Angeles)\n"
-            "4. Preferred response style (concise/analytical/friendly)"
-        )
-
     def _capture_profile_from_message(self, user_id: int, message: str, language: str) -> None:
         text = str(message or "").strip()
         if not text:
@@ -2318,6 +2362,9 @@ class MessageHandlers:
         update: Update,
         user_id: int,
         messages: list[Any],
+        user_message: str,
+        user_language: str,
+        previous_assistant_message: str,
         execution_id: str | None = None,
     ) -> str:
         self._emit_workflow_event(
@@ -2392,6 +2439,12 @@ class MessageHandlers:
             },
         )
         final_text = assembled.strip() or "I am here with you."
+        final_text = self._sanitize_response_for_policy(
+            response=final_text,
+            user_message=user_message,
+            user_language=user_language,
+            previous_assistant_message=previous_assistant_message,
+        )
         try:
             await progress.edit_text(final_text[:3900])
         except Exception:  # noqa: BLE001
@@ -2507,17 +2560,6 @@ class MessageHandlers:
         user_language = self._detect_user_language(message, user_id, previous_context)
         self._capture_profile_from_message(user_id, message, user_language)
         self._user_profiles.upsert_personalization_profile(user_id=user_id, preferred_language=user_language)
-        if self._profile_needs_onboarding(user_id):
-            onboarding = self._onboarding_questions(user_language)
-            return {
-                "execution_id": execution_id or "",
-                "response": onboarding,
-                "mode": CHAT_MODE,
-                "language": user_language,
-                "scheduled_tasks": 0,
-                "task_succeeded": True,
-                "total_latency_ms": round((time.perf_counter() - request_started_at) * 1000.0, 2),
-            }
 
         if not self.is_admin(user_id) and not self.rate_limiter.is_allowed(user_id):
             response = self._render_in_user_language(user_id, user_language, "⏱️ Please slow down a bit!")
@@ -2669,6 +2711,8 @@ class MessageHandlers:
                     SystemMessage(
                         content=(
                             "You are HER. If user message is conversational, respond conversationally. "
+                            "Answer the user's request first. Ask one clarification only if required. "
+                            "Do not ask onboarding/profile questions unless user explicitly requests setup/config/reset. "
                             f"Respond strictly in language code {user_language}."
                         )
                     ),
@@ -2722,6 +2766,12 @@ class MessageHandlers:
             task_succeeded = False
 
         response = self._render_in_user_language(user_id, user_language, response)
+        response = self._sanitize_response_for_policy(
+            response=response,
+            user_message=message,
+            user_language=user_language,
+            previous_assistant_message=previous_assistant_message,
+        )
         self.memory.update_context(str(user_id), response, "assistant")
         if self._metrics:
             self._metrics.record_interaction(str(user_id), message, response)
@@ -2828,9 +2878,6 @@ class MessageHandlers:
         user_language = self._detect_user_language(message, user_id, previous_context)
         self._capture_profile_from_message(user_id, message, user_language)
         self._user_profiles.upsert_personalization_profile(user_id=user_id, preferred_language=user_language)
-        if self._profile_needs_onboarding(user_id):
-            await self._reply(update, self._onboarding_questions(user_language))
-            return
 
         if not self.is_admin(user_id) and not self.rate_limiter.is_allowed(user_id):
             await self._reply(
@@ -2989,6 +3036,8 @@ class MessageHandlers:
                     SystemMessage(
                         content=(
                             "You are HER. If user message is conversational, respond conversationally. "
+                            "Answer the user's request first. Ask one clarification only if required. "
+                            "Do not ask onboarding/profile questions unless user explicitly requests setup/config/reset. "
                             f"Respond strictly in language code {user_language}."
                         )
                     ),
@@ -2998,6 +3047,9 @@ class MessageHandlers:
                     update,
                     user_id,
                     llm_messages,
+                    message,
+                    user_language,
+                    previous_assistant_message,
                     execution_id=execution_id,
                 )
                 response_already_sent = True
@@ -3014,6 +3066,12 @@ class MessageHandlers:
             return
 
         response = self._render_in_user_language(user_id, user_language, response)
+        response = self._sanitize_response_for_policy(
+            response=response,
+            user_message=message,
+            user_language=user_language,
+            previous_assistant_message=previous_assistant_message,
+        )
         if response and not response_already_sent:
             await self._reply(update, response[:3900])
 

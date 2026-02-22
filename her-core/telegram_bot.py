@@ -44,10 +44,16 @@ def _build_user_prompt(user_text: str, context_messages: list[dict[str, str]], r
     return (
         "You are HER, a warm and emotionally intelligent personal AI companion. "
         "Respond naturally like a real conversational agent, not a system acknowledgement.\n\n"
+        "Policy:\n"
+        "- Answer the user directly first.\n"
+        "- Ask at most one clarification question only when required.\n"
+        "- Do not ask onboarding/profile questions unless user explicitly requests setup/config/reset.\n"
+        "- Keep language consistent with the user's message language.\n"
+        "- Avoid repetitive follow-ups or repeated prompts.\n\n"
         f"Recent conversation context:\n{recent_context}\n\n"
         f"Potentially relevant long-term memories:\n{related_memory_text}\n\n"
         f"User message: {user_text}\n\n"
-        "Write a concise, empathetic reply. If clarification helps, ask one short follow-up question."
+        "Write a concise, empathetic reply."
     )
 
 
@@ -153,6 +159,7 @@ def build_application(config: AppConfig, memory: HERMemory | Any, metrics: HERMe
                         SystemMessage(
                             content=(
                                 "You are HER. Be warm, emotionally aware, and practical. "
+                                "Answer directly first and avoid onboarding questions unless user requested setup/reset. "
                                 "Do not expose system internals."
                             )
                         ),

@@ -80,7 +80,7 @@ Detailed setup: `docs/installation.md`
 - Persisted reinforcement events and profile updates
 - Weekly self-optimization scheduler task
 - APScheduler persistent SQL job store (restart-safe schedules)
-- Daily proactive dispatcher (1-3 randomized messages/user with profile safeguards)
+- Optional daily proactive dispatcher (1-3 randomized messages/user with profile safeguards; disabled by default via `HER_PROACTIVE_MESSAGES_ENABLED=false`)
 
 ### Agent Architecture (CrewAI)
 

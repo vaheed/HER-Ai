@@ -179,6 +179,7 @@ def test_scheduler_uses_time_module_for_execution_timing() -> None:
 
 def test_scheduler_supports_runtime_updates_and_persistence() -> None:
     source = Path("her-core/utils/scheduler.py").read_text()
+    env_example = Path(".env.example").read_text()
     assert "def persist_tasks" in source
     assert "def set_task_interval" in source
     assert "def set_task_enabled" in source
@@ -198,6 +199,8 @@ def test_scheduler_supports_runtime_updates_and_persistence() -> None:
     assert "one_time" in source
     assert 'task_type == "self_optimization"' in source
     assert "weekly_self_optimization" in source
+    assert "_proactive_messages_enabled" in source
+    assert "HER_PROACTIVE_MESSAGES_ENABLED" in env_example
     assert "summarize_recent_patterns" in source
     assert "SQLAlchemyJobStore" in source
     assert "BackgroundScheduler" in source
@@ -354,6 +357,21 @@ def test_handlers_enforce_language_alignment_and_multi_intent_schedule_flow() ->
     assert "def _build_scheduler_confirmation(" in handlers_source
     assert "✅ " in handlers_source
     assert "latest user message with full conversation context" in handlers_source
+
+
+def test_handlers_apply_production_safe_conversation_policy() -> None:
+    handlers_source = Path("her-core/her_telegram/handlers.py").read_text()
+    telegram_bot_source = Path("her-core/telegram_bot.py").read_text()
+
+    assert "Production-safe response policy:" in handlers_source
+    assert "Never send unsolicited follow-up messages or reminders." in handlers_source
+    assert "def _sanitize_response_for_policy(" in handlers_source
+    assert "def _user_requested_profile_setup(" in handlers_source
+    assert "Do not ask onboarding/profile questions unless user explicitly requests setup/config/reset." in handlers_source
+    assert "_profile_needs_onboarding(" not in handlers_source
+    assert "def _onboarding_questions(" not in handlers_source
+    assert "if self._profile_needs_onboarding(user_id):" not in handlers_source
+    assert "Do not ask onboarding/profile questions unless user explicitly requests setup/config/reset." in telegram_bot_source
 
 
 def test_sandbox_container_emits_startup_ready_log() -> None:

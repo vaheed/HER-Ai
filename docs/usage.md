@@ -61,6 +61,7 @@ Current handlers include:
 - conversation-context continuity,
 - multilingual request handling,
 - language-aligned confirmations for scheduling and automation flows.
+- production-safe conversation behavior by default: answer-first, no onboarding loop, no unsolicited follow-up reminders, and no repeated setup questions unless user explicitly asks for setup/reset.
 
 Reference implementation: `her-core/her_telegram/handlers.py`.
 

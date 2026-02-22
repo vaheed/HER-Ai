@@ -122,6 +122,11 @@ class TaskScheduler:
         except Exception:  # noqa: BLE001
             return "UTC"
 
+    @staticmethod
+    def _proactive_messages_enabled() -> bool:
+        value = os.getenv("HER_PROACTIVE_MESSAGES_ENABLED", "false")
+        return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
     def _ensure_lock_table(self) -> None:
         connection = None
         try:
@@ -259,17 +264,20 @@ class TaskScheduler:
                 "max_retries": 1,
                 "retry_delay_seconds": 60,
             },
-            {
-                "name": "proactive_daily_dispatcher",
-                "type": "proactive_daily_dispatcher",
-                "interval": "daily",
-                "enabled": True,
-                "at": "08:05",
-                "timezone": self._system_timezone(),
-                "max_retries": 1,
-                "retry_delay_seconds": 60,
-            },
         ]
+        if self._proactive_messages_enabled():
+            baseline.append(
+                {
+                    "name": "proactive_daily_dispatcher",
+                    "type": "proactive_daily_dispatcher",
+                    "interval": "daily",
+                    "enabled": True,
+                    "at": "08:05",
+                    "timezone": self._system_timezone(),
+                    "max_retries": 1,
+                    "retry_delay_seconds": 60,
+                }
+            )
         by_name = {str(task.get("name", "")): task for task in self.tasks}
         for item in baseline:
             existing = by_name.get(item["name"])
@@ -286,6 +294,12 @@ class TaskScheduler:
             existing.setdefault("max_retries", item["max_retries"])
             existing.setdefault("retry_delay_seconds", item["retry_delay_seconds"])
 
+        if not self._proactive_messages_enabled():
+            for task in self.tasks:
+                task_type = str(task.get("type", "")).strip().lower()
+                if task_type in {"proactive_daily_dispatcher", "proactive_message"}:
+                    task["enabled"] = False
+
     def _register_system_jobs(self) -> None:
         if self._scheduler is None:
             return
@@ -299,16 +313,17 @@ class TaskScheduler:
             coalesce=True,
             misfire_grace_time=60,
         )
-        self._scheduler.add_job(
-            func=_scheduler_run_system_job_entry,
-            trigger=IntervalTrigger(minutes=30, timezone=self._system_timezone()),
-            id="system:follow_up_logic",
-            replace_existing=True,
-            kwargs={"job_name": "follow_up_logic"},
-            max_instances=1,
-            coalesce=True,
-            misfire_grace_time=120,
-        )
+        if self._proactive_messages_enabled():
+            self._scheduler.add_job(
+                func=_scheduler_run_system_job_entry,
+                trigger=IntervalTrigger(minutes=30, timezone=self._system_timezone()),
+                id="system:follow_up_logic",
+                replace_existing=True,
+                kwargs={"job_name": "follow_up_logic"},
+                max_instances=1,
+                coalesce=True,
+                misfire_grace_time=120,
+            )
 
     def _sync_all_task_jobs(self) -> None:
         if self._scheduler is None:
@@ -475,6 +490,8 @@ class TaskScheduler:
             self._release_job_lock(lock)
 
     def _run_follow_up_logic(self) -> None:
+        if not self._proactive_messages_enabled():
+            return
         lock = self._acquire_job_lock("system:follow_up_logic")
         if lock is None:
             return
@@ -540,8 +557,12 @@ class TaskScheduler:
         if task_type == "memory_reflection":
             return True, "memory_reflection_completed", ""
         if task_type == "proactive_daily_dispatcher":
+            if not self._proactive_messages_enabled():
+                return True, "proactive_disabled", ""
             return self._execute_proactive_dispatcher(task)
         if task_type == "proactive_message":
+            if not self._proactive_messages_enabled():
+                return True, "proactive_disabled", ""
             return self._execute_proactive_message_task(task)
         return True, "custom_task_processed", ""
 
@@ -644,6 +665,8 @@ class TaskScheduler:
         return True, f"self_optimization_avg={avg_score}", ""
 
     def _execute_proactive_dispatcher(self, task: dict[str, Any]) -> tuple[bool, str, str]:
+        if not self._proactive_messages_enabled():
+            return True, "proactive_disabled", ""
         del task
         today = datetime.now(timezone.utc).date()
         created = 0
@@ -696,6 +719,8 @@ class TaskScheduler:
         return count
 
     def _execute_proactive_message_task(self, task: dict[str, Any]) -> tuple[bool, str, str]:
+        if not self._proactive_messages_enabled():
+            return True, "proactive_disabled", ""
         chat_id = self._resolve_reminder_chat_id(task)
         if chat_id is None:
             return False, "", "chat_id missing for proactive message"

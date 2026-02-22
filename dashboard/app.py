@@ -434,6 +434,76 @@ def parse_decisions(decision_rows: list[str]) -> pd.DataFrame:
     return df
 
 
+def parse_debate_events(decision_rows: list[str]) -> pd.DataFrame:
+    rows: list[dict[str, Any]] = []
+    for raw in decision_rows:
+        payload = safe_json(raw)
+        if str(payload.get("event_type", "")) not in {"internal_debate", "verifier_result"}:
+            continue
+        details = payload.get("details") if isinstance(payload.get("details"), dict) else {}
+        rows.append(
+            {
+                "timestamp": parse_ts(payload.get("timestamp")),
+                "user_id": str(payload.get("user_id", "")),
+                "event_type": str(payload.get("event_type", "")),
+                "planner": json.dumps(details.get("planner", {}), ensure_ascii=True),
+                "skeptic": json.dumps(details.get("skeptic", {}), ensure_ascii=True),
+                "approved": bool(details.get("approved", details.get("verified", False))),
+                "notes": str(details.get("notes", "")),
+            }
+        )
+    df = pd.DataFrame(rows)
+    if not df.empty:
+        df = df[df["timestamp"].notna()].sort_values("timestamp", ascending=False)
+    return df
+
+
+def parse_reflection_events(decision_rows: list[str]) -> pd.DataFrame:
+    rows: list[dict[str, Any]] = []
+    for raw in decision_rows:
+        payload = safe_json(raw)
+        if str(payload.get("event_type", "")) != "reflection":
+            continue
+        details = payload.get("details") if isinstance(payload.get("details"), dict) else {}
+        rows.append(
+            {
+                "timestamp": parse_ts(payload.get("timestamp")),
+                "user_id": str(payload.get("user_id", "")),
+                "date": str(details.get("date", "")),
+                "engagement_trend": str(details.get("engagement_trend", "")),
+                "initiative_adjustment": float(details.get("initiative_adjustment", 0.0) or 0.0),
+                "notes": str(details.get("notes", "")),
+            }
+        )
+    df = pd.DataFrame(rows)
+    if not df.empty:
+        df = df[df["timestamp"].notna()].sort_values("timestamp", ascending=False)
+    return df
+
+
+def parse_autonomy_updates(decision_rows: list[str]) -> pd.DataFrame:
+    rows: list[dict[str, Any]] = []
+    for raw in decision_rows:
+        payload = safe_json(raw)
+        if str(payload.get("event_type", "")) != "autonomy_profile_updated":
+            continue
+        details = payload.get("details") if isinstance(payload.get("details"), dict) else {}
+        rows.append(
+            {
+                "timestamp": parse_ts(payload.get("timestamp")),
+                "user_id": str(payload.get("user_id", "")),
+                "engagement_score": float(details.get("engagement_score", 0.0) or 0.0),
+                "initiative_level": float(details.get("initiative_level", 0.0) or 0.0),
+                "mood": str(details.get("mood", "calm")),
+                "mood_intensity": float(details.get("mood_intensity", 0.0) or 0.0),
+            }
+        )
+    df = pd.DataFrame(rows)
+    if not df.empty:
+        df = df[df["timestamp"].notna()].sort_values("timestamp", ascending=False)
+    return df
+
+
 def get_recent_chats(redis_client, limit: int = 200) -> list[dict[str, Any]]:
     if not redis_client:
         return []
@@ -844,6 +914,9 @@ jobs_df = pd.DataFrame([safe_json(row) for row in metrics.get("scheduled_jobs", 
 decision_df = parse_decisions(metrics.get("decision_logs", []))
 reminder_event_df = parse_reminder_events(metrics.get("decision_logs", []))
 timezone_conversion_df = parse_timezone_conversions(metrics.get("decision_logs", []))
+debate_df = parse_debate_events(metrics.get("decision_logs", []))
+reflection_df = parse_reflection_events(metrics.get("decision_logs", []))
+autonomy_df = parse_autonomy_updates(metrics.get("decision_logs", []))
 if exec_df.empty:
     exec_df = parse_execs_from_decisions(metrics.get("decision_logs", []))
 
@@ -1051,6 +1124,30 @@ elif page == "Jobs":
         st.info("No upcoming scheduler state found. Key: `her:scheduler:state`")
 
     st.markdown("---")
+    st.subheader("Autonomy State Snapshot")
+    autonomy_rows = scheduler_state.get("autonomy", []) if scheduler_state else []
+    if autonomy_rows:
+        autonomy_state_df = pd.DataFrame(autonomy_rows)
+        st.dataframe(
+            autonomy_state_df[
+                [
+                    "user_id",
+                    "engagement_score",
+                    "initiative_level",
+                    "messages_sent_today",
+                    "current_mood",
+                    "mood_intensity",
+                    "daily_target",
+                    "last_proactive_at",
+                ]
+            ].head(100),
+            use_container_width=True,
+            hide_index=True,
+        )
+    else:
+        st.info("No autonomy snapshot rows yet.")
+
+    st.markdown("---")
     st.subheader("Execution History")
     if jobs_df.empty:
         st.info("No scheduled jobs executed yet. Jobs are logged to Redis under 'her:scheduler:jobs'.")
@@ -1086,7 +1183,7 @@ elif page == "Jobs":
     if decision_df.empty:
         st.info("No reasoning flow events yet.")
     else:
-        reasoning_trace = decision_df[decision_df["event_type"].isin(["agent_step", "autonomous_operator_action"])].copy()
+        reasoning_trace = decision_df[decision_df["event_type"].isin(["agent_step", "autonomous_operator_action", "internal_debate", "verifier_result"])].copy()
         if reasoning_trace.empty:
             st.info("No agent step traces found yet.")
         else:
@@ -1095,6 +1192,28 @@ elif page == "Jobs":
                 use_container_width=True,
                 hide_index=True,
             )
+
+    st.markdown("---")
+    st.subheader("Debate Trace (Planner / Skeptic / Verifier)")
+    if debate_df.empty:
+        st.info("No debate trace events yet.")
+    else:
+        st.dataframe(
+            debate_df[["timestamp", "user_id", "event_type", "approved", "planner", "skeptic", "notes"]].head(150),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    st.markdown("---")
+    st.subheader("Daily Reflection Events")
+    if reflection_df.empty:
+        st.info("No reflection events yet.")
+    else:
+        st.dataframe(
+            reflection_df[["timestamp", "user_id", "date", "engagement_trend", "initiative_adjustment", "notes"]].head(150),
+            use_container_width=True,
+            hide_index=True,
+        )
 
     st.markdown("---")
     st.subheader("Failure Heatmap")
@@ -1120,6 +1239,16 @@ elif page == "Decisions":
         st.dataframe(decision_df.head(300), use_container_width=True, hide_index=True)
         count_df = decision_df["event_type"].value_counts().rename_axis("event_type").reset_index(name="count")
         render_plotly_bar(count_df, "event_type", "count", "Decision Events by Type")
+        if not autonomy_df.empty:
+            st.markdown("---")
+            st.subheader("Autonomy Trend")
+            trend_df = autonomy_df.copy()
+            trend_df["hour"] = trend_df["timestamp"].dt.floor("h")
+            agg = trend_df.groupby("hour", as_index=False).agg(
+                engagement_score=("engagement_score", "mean"),
+                initiative_level=("initiative_level", "mean"),
+            )
+            render_plotly_line(agg, "hour", ["engagement_score", "initiative_level"], "Engagement / Initiative Trend")
 
 elif page == "Metrics":
     st.title("Detailed Metrics")

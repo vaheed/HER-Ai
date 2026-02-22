@@ -20,7 +20,7 @@ from datetime import UTC, date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError
-from urllib.parse import urlencode
+from urllib.parse import quote_plus, urlencode
 from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo
 
@@ -32,6 +32,8 @@ from apscheduler.triggers.date import DateTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
 from agents.personality_agent import PersonalityAgent
+from her_mcp.sandbox_tools import SandboxExecutor
+from utils.autonomy import AutonomyService
 from utils.config_paths import resolve_config_file
 from utils.decision_log import DecisionLogger
 from utils.reinforcement import ReinforcementEngine
@@ -57,6 +59,8 @@ class TaskScheduler:
         self._decision_logger = DecisionLogger()
         self._reinforcement = ReinforcementEngine()
         self._user_profiles = UserProfileStore(default_timezone=os.getenv("USER_TIMEZONE", "UTC"))
+        self._autonomy = AutonomyService()
+        self._sandbox_executor = SandboxExecutor(container_name=os.getenv("SANDBOX_CONTAINER_NAME", "her-sandbox"))
         self._start_lock = threading.Lock()
         self._scheduler: BackgroundScheduler | None = None
         self._jobstores = {
@@ -73,6 +77,7 @@ class TaskScheduler:
             self._scheduler = BackgroundScheduler(jobstores=self._jobstores, timezone=self._system_timezone())
             self._scheduler.start()
             self._ensure_lock_table()
+            self._autonomy.ensure_tables()
             self._register_system_jobs()
             self._sync_all_task_jobs()
             self.running = True
@@ -260,6 +265,16 @@ class TaskScheduler:
                 "interval": "weekly",
                 "enabled": True,
                 "at": "18:00",
+                "timezone": self._system_timezone(),
+                "max_retries": 1,
+                "retry_delay_seconds": 60,
+            },
+            {
+                "name": "autonomy_daily_reflection",
+                "type": "autonomy_reflection",
+                "interval": "daily",
+                "enabled": True,
+                "at": "21:10",
                 "timezone": self._system_timezone(),
                 "max_retries": 1,
                 "retry_delay_seconds": 60,
@@ -509,9 +524,36 @@ class TaskScheduler:
                     continue
                 if now - last_touch < timedelta(hours=18):
                     continue
-                mood = self._resolve_daily_mood(now.date())
-                message = self._proactive_message_for_user(profile.user_id, mood, kind="follow_up")
-                self._send_telegram_notification(profile.chat_id, message)
+                if self._count_scheduled_proactive(str(profile.user_id), now.date()) >= 1:
+                    continue
+                rng = random.Random(f"{profile.user_id}:{now.date().isoformat()}:followup")
+                follow_up_task = {
+                    "name": f"followup_{profile.user_id}_{int(now.timestamp())}",
+                    "type": "proactive_message",
+                    "interval": "once",
+                    "one_time": True,
+                    "enabled": True,
+                    "run_at": (now + timedelta(minutes=int(rng.randint(10, 55)))).isoformat(),
+                    "timezone": profile.timezone or "UTC",
+                    "user_timezone": profile.timezone or "UTC",
+                    "chat_id": profile.chat_id,
+                    "notify_user_id": int(profile.user_id) if str(profile.user_id).isdigit() else profile.telegram_user_id,
+                    "language": profile.preferred_language,
+                    "message_kind": "follow_up",
+                    "mood": self._resolve_daily_mood(now.date(), user_id=str(profile.user_id), rng=rng),
+                    "trigger_reasons": ["follow_up_logic"],
+                    "max_retries": 1,
+                    "retry_delay_seconds": 30,
+                }
+                self.tasks.append(follow_up_task)
+                self._upsert_task_job(follow_up_task)
+                self._decision_logger.log(
+                    event_type="proactive_followup_scheduled",
+                    summary=f"Follow-up proactive task scheduled for user {profile.user_id}",
+                    user_id=str(profile.user_id),
+                    source="scheduler",
+                    details={"task_name": follow_up_task["name"], "run_at": follow_up_task["run_at"]},
+                )
         finally:
             self._release_job_lock(lock)
 
@@ -556,6 +598,8 @@ class TaskScheduler:
             return self._execute_self_optimization_task(task)
         if task_type == "memory_reflection":
             return True, "memory_reflection_completed", ""
+        if task_type == "autonomy_reflection":
+            return self._execute_autonomy_reflection_task(task)
         if task_type == "proactive_daily_dispatcher":
             if not self._proactive_messages_enabled():
                 return True, "proactive_disabled", ""
@@ -664,25 +708,53 @@ class TaskScheduler:
         )
         return True, f"self_optimization_avg={avg_score}", ""
 
+    def _execute_autonomy_reflection_task(self, task: dict[str, Any]) -> tuple[bool, str, str]:
+        del task
+        target_day = datetime.now(timezone.utc).date()
+        reflected = 0
+        redis_client = self._redis_client()
+        for profile in self._active_user_profiles(limit=500):
+            user_id = str(profile.user_id)
+            entry = self._autonomy.generate_daily_reflection(user_id, target_day)
+            reflected += 1
+            if redis_client is not None:
+                try:
+                    redis_client.lpush(f"her:reflection:{user_id}", self._autonomy.serialize_reflection(entry))
+                    redis_client.ltrim(f"her:reflection:{user_id}", 0, 60)
+                except Exception:  # noqa: BLE001
+                    pass
+        return True, f"autonomy_reflections={reflected}", ""
+
     def _execute_proactive_dispatcher(self, task: dict[str, Any]) -> tuple[bool, str, str]:
         if not self._proactive_messages_enabled():
             return True, "proactive_disabled", ""
         del task
-        today = datetime.now(timezone.utc).date()
+        now_utc = datetime.now(timezone.utc)
+        today = now_utc.date()
         created = 0
         for profile in self._active_user_profiles(limit=1000):
             if profile.proactive_opt_out:
                 continue
             if not profile.chat_id:
                 continue
-            frequency = (profile.interaction_frequency or "normal").strip().lower()
-            max_daily = 1 if frequency in {"low", "rare"} else (3 if frequency in {"high", "frequent"} else 2)
-            num_messages = random.randint(1, min(3, max_daily))
             day_tz = profile.timezone or "UTC"
-            if self._count_scheduled_proactive(profile.user_id, today) >= max_daily:
+            allowed, reason, snapshot = self._autonomy.can_send_proactive(user_id=str(profile.user_id), timezone_name=day_tz)
+            if not allowed:
+                logger.info("proactive_dispatcher_skip", extra={"event": "proactive_dispatcher_skip", "user_id": str(profile.user_id), "reason": reason})
                 continue
-            for run_at in self._random_daily_times(today, day_tz, num_messages):
-                message_kind = random.choice(["checkin", "follow_up", "fact", "support", "curiosity", "joke", "reflection"])
+            trigger_reasons = self._initiative_trigger_reasons(user_id=str(profile.user_id), timezone_name=day_tz, now_utc=now_utc)
+            if not trigger_reasons:
+                continue
+            target = int(snapshot.get("target", 1) or 1)
+            if self._count_scheduled_proactive(str(profile.user_id), today) >= min(3, target):
+                continue
+
+            rng = random.Random(f"{profile.user_id}:{today.isoformat()}")
+            mood = self._resolve_daily_mood(today, user_id=str(profile.user_id), rng=rng)
+            kinds = self._proactive_kinds_for_trigger(trigger_reasons)
+            window_times = self._random_daily_times(today, day_tz, min(3, target), rng=rng)
+            for run_at in window_times:
+                message_kind = kinds[rng.randrange(len(kinds))]
                 proactive_task = {
                     "name": f"proactive_{profile.user_id}_{int(run_at.timestamp())}",
                     "type": "proactive_message",
@@ -696,6 +768,8 @@ class TaskScheduler:
                     "notify_user_id": int(profile.user_id) if str(profile.user_id).isdigit() else profile.telegram_user_id,
                     "language": profile.preferred_language,
                     "message_kind": message_kind,
+                    "mood": mood,
+                    "trigger_reasons": trigger_reasons,
                     "max_retries": 1,
                     "retry_delay_seconds": 30,
                 }
@@ -711,6 +785,8 @@ class TaskScheduler:
                 continue
             if str(task.get("notify_user_id", "")) != str(user_id):
                 continue
+            if not bool(task.get("enabled", True)):
+                continue
             run_at = self._parse_iso_timestamp(task.get("run_at"))
             if run_at is None:
                 continue
@@ -725,19 +801,35 @@ class TaskScheduler:
         if chat_id is None:
             return False, "", "chat_id missing for proactive message"
         user_id = str(task.get("notify_user_id", "")).strip() or str(task.get("chat_id", ""))
-        mood = self._resolve_daily_mood(datetime.now(timezone.utc).date())
+        profile = self._user_profiles.get_personalization_profile(user_id)
+        if profile.proactive_opt_out:
+            return True, "proactive_opt_out", ""
+        now_utc = datetime.now(timezone.utc)
+        allowed, reason, _ = self._autonomy.can_send_proactive(user_id=user_id, timezone_name=profile.timezone)
+        if not allowed:
+            return True, f"proactive_blocked:{reason}", ""
+        slot = self._autonomy.reserve_daily_slot(user_id=user_id, day_bucket=now_utc.date())
+        if slot is None:
+            return True, "proactive_daily_cap_db_guard", ""
+
+        mood = str(task.get("mood", "")).strip().lower()
+        if not mood:
+            mood = self._resolve_daily_mood(now_utc.date(), user_id=user_id)
         kind = str(task.get("message_kind", "checkin") or "checkin")
         message = self._proactive_message_for_user(user_id=user_id, mood=mood, kind=kind)
         sent, reason = self._send_telegram_notification(chat_id, message)
         self._record_proactive_audit(
             user_id=user_id,
-            scheduled_at=self._parse_iso_timestamp(task.get("run_at")) or datetime.now(timezone.utc),
-            sent_at=datetime.now(timezone.utc) if sent else None,
+            scheduled_at=self._parse_iso_timestamp(task.get("run_at")) or now_utc,
+            sent_at=now_utc if sent else None,
             kind=kind,
             mood=mood,
             success=sent,
-            details={"reason": reason or "", "chat_id": chat_id},
+            day_bucket=now_utc.date(),
+            daily_slot=slot,
+            details={"reason": reason or "", "chat_id": chat_id, "trigger_reasons": task.get("trigger_reasons", [])},
         )
+        self._autonomy.register_proactive_result(user_id=user_id, sent=sent, error=str(reason or ""))
         if sent:
             return True, "proactive_sent", ""
         return False, "", f"proactive_send_failed:{reason}"
@@ -751,6 +843,8 @@ class TaskScheduler:
         kind: str,
         mood: str,
         success: bool,
+        day_bucket: date | None = None,
+        daily_slot: int | None = None,
         details: dict[str, Any],
     ) -> None:
         connection = None
@@ -768,8 +862,8 @@ class TaskScheduler:
                 cursor.execute(
                     """
                     INSERT INTO proactive_message_audit (
-                        user_id, scheduled_at, sent_at, message_kind, mood, success, details
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb)
+                        user_id, scheduled_at, sent_at, message_kind, mood, success, day_bucket, daily_slot, details
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
                     """,
                     (
                         user_id,
@@ -778,6 +872,8 @@ class TaskScheduler:
                         kind,
                         mood,
                         bool(success),
+                        day_bucket or scheduled_at.date(),
+                        daily_slot,
                         json.dumps(details),
                     ),
                 )
@@ -821,24 +917,87 @@ class TaskScheduler:
                 connection.close()
         return profiles
 
-    @staticmethod
-    def _resolve_daily_mood(target_day: date) -> str:
-        moods = ["curious", "playful", "reflective", "supportive"]
-        return moods[target_day.toordinal() % len(moods)]
+    def _resolve_daily_mood(self, target_day: date, user_id: str | None = None, rng: random.Random | None = None) -> str:
+        if user_id:
+            snapshot = self._autonomy.profile_snapshot(user_id)
+            mood = str(snapshot.get("current_mood", "calm")).strip().lower()
+            if mood:
+                return mood
+        weighted = [("calm", 4), ("supportive", 3), ("reflective", 2), ("curious", 3), ("playful", 1)]
+        seed = rng or random.Random(f"{target_day.isoformat()}:mood")
+        total = sum(weight for _, weight in weighted)
+        pick = seed.randint(1, total)
+        cursor = 0
+        for mood, weight in weighted:
+            cursor += weight
+            if pick <= cursor:
+                return mood
+        return "calm"
 
     @staticmethod
-    def _random_daily_times(day_utc: date, timezone_name: str, count: int) -> list[datetime]:
+    def _random_daily_times(day_utc: date, timezone_name: str, count: int, rng: random.Random | None = None) -> list[datetime]:
         try:
             tz = ZoneInfo(timezone_name)
         except Exception:  # noqa: BLE001
             tz = ZoneInfo("UTC")
+        local_day = datetime.now(UTC).astimezone(tz).date()
+        day_local = local_day if day_utc == datetime.now(UTC).date() else day_utc
+        generator = rng or random.Random(f"{timezone_name}:{day_utc.isoformat()}")
         times: list[datetime] = []
         for _ in range(max(1, int(count))):
-            hour = random.randint(9, 20)
-            minute = random.randint(0, 59)
-            local_dt = datetime(day_utc.year, day_utc.month, day_utc.day, hour, minute, tzinfo=tz)
+            hour = generator.randint(8, 20)
+            minute = generator.randint(0, 59)
+            local_dt = datetime(day_local.year, day_local.month, day_local.day, hour, minute, tzinfo=tz)
             times.append(local_dt.astimezone(UTC))
         return sorted(times)
+
+    def _initiative_trigger_reasons(self, user_id: str, timezone_name: str, now_utc: datetime) -> list[str]:
+        reasons: list[str] = []
+        memory_hint = self._memory_hint_for_user(user_id).lower()
+        if any(token in memory_hint for token in ("stress", "overwhelm", "استرس", "فشار")):
+            reasons.append("stress_signal")
+        if any(token in memory_hint for token in ("deadline", "due", "ددلاین")):
+            reasons.append("deadline_signal")
+        last_touch = self._last_user_context_timestamp(user_id)
+        if last_touch is not None and now_utc - last_touch >= timedelta(hours=24):
+            reasons.append("long_silence")
+        try:
+            local_hour = now_utc.astimezone(ZoneInfo(timezone_name)).hour
+            if 8 <= local_hour <= 11:
+                reasons.append("daily_greeting_window")
+        except Exception:  # noqa: BLE001
+            pass
+        seeded = random.Random(f"{user_id}:{now_utc.date().isoformat()}:news")
+        if seeded.random() <= 0.35 and self._interest_in_news(user_id):
+            reasons.append("interest_news")
+        return reasons
+
+    def _interest_in_news(self, user_id: str) -> bool:
+        hint = self._memory_hint_for_user(user_id)
+        tokens = [token for token in re.findall(r"[a-zA-Z]{4,}", hint) if token.lower() not in {"that", "this", "with", "from"}]
+        keyword = tokens[0] if tokens else "technology"
+        safe_query = quote_plus(f"{keyword} news")
+        command = f"curl -s 'https://duckduckgo.com/?q={safe_query}&ia=news' | head -c 1200"
+        result = self._sandbox_executor.execute_command(
+            command=command,
+            timeout=10,
+            cpu_time_limit_seconds=8,
+            memory_limit_mb=128,
+        )
+        output = str(result.get("output", "")).lower()
+        return bool(result.get("success")) and keyword.lower() in output
+
+    @staticmethod
+    def _proactive_kinds_for_trigger(reasons: list[str]) -> list[str]:
+        if "stress_signal" in reasons:
+            return ["support", "checkin", "follow_up"]
+        if "deadline_signal" in reasons:
+            return ["follow_up", "support", "reflection"]
+        if "interest_news" in reasons:
+            return ["fact", "curiosity", "checkin"]
+        if "long_silence" in reasons:
+            return ["checkin", "curiosity"]
+        return ["checkin", "follow_up", "reflection", "curiosity"]
 
     def _proactive_message_for_user(self, user_id: str, mood: str, kind: str) -> str:
         profile = self._user_profiles.get_personalization_profile(user_id)
@@ -889,7 +1048,21 @@ class TaskScheduler:
         return "something important"
 
     def _last_user_context_timestamp(self, user_id: str) -> datetime | None:
-        del user_id
+        client = self._redis_client()
+        if client is None:
+            return datetime.now(timezone.utc) - timedelta(hours=24)
+        try:
+            rows = client.lrange(f"her:context:{user_id}", -20, -1)
+            for raw in reversed(rows):
+                payload = json.loads(raw)
+                if str(payload.get("role", "")).lower() != "user":
+                    continue
+                for key in ("timestamp", "created_at", "time"):
+                    parsed = self._parse_iso_timestamp(payload.get(key))
+                    if parsed is not None:
+                        return parsed
+        except Exception:  # noqa: BLE001
+            pass
         return datetime.now(timezone.utc) - timedelta(hours=24)
 
     def _send_telegram_notification(self, chat_id: int, text: str) -> tuple[bool, str | None]:
@@ -1109,12 +1282,19 @@ class TaskScheduler:
         if client is None:
             return
         try:
+            autonomy_rows: list[dict[str, Any]] = []
+            for profile in self._active_user_profiles(limit=30):
+                try:
+                    autonomy_rows.append(self._autonomy.profile_snapshot(str(profile.user_id)))
+                except Exception:  # noqa: BLE001
+                    continue
             payload = {
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "task_count": len(self.tasks),
                 "system_tz": self._system_timezone(),
                 "default_user_tz": os.getenv("USER_TIMEZONE", "UTC"),
                 "upcoming": self.get_upcoming_jobs(limit=100),
+                "autonomy": autonomy_rows,
             }
             client.set("her:scheduler:state", json.dumps(payload))
         except Exception:  # noqa: BLE001

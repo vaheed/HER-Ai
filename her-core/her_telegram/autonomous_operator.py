@@ -58,7 +58,7 @@ class AutonomousSandboxOperator:
         self,
         llm_invoke: Callable[[list[Any], int], tuple[str, bool]],
         container_name: str = "her-sandbox",
-        max_steps: int = 16,
+        max_steps: int = 5,
         command_timeout_seconds: int = 60,
         cpu_time_limit_seconds: int = 20,
         memory_limit_mb: int = 512,

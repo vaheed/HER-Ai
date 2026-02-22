@@ -36,6 +36,8 @@ HER-Ai is organized into five layers:
 Telegram message
   -> her_telegram.handlers.MessageHandlers
   -> strict intent classifier (CHAT_MODE default, ACTION_MODE on explicit high-confidence action intent)
+  -> autonomy profile update (engagement + initiative + mood persistence)
+  -> internal debate (Planner -> Skeptic -> Verifier gate)
   -> context update (Redis)
   -> memory lookup (Mem0/pgvector)
   -> LLM response generation (with optional failover)
@@ -73,3 +75,5 @@ Reference: `docker-compose.yml`.
 - MCP startup is resilient to per-server failures/timeouts (`MCP_SERVER_START_TIMEOUT_SECONDS`).
 - Memory reads/writes can degrade gracefully when backend is unavailable if `MEMORY_STRICT_MODE=false`.
 - Scheduler tasks persist to YAML and fallback to Redis override if config path is not writable.
+- Proactive autonomy uses deterministic seeded randomness per user/day with DB-level daily slot caps.
+- Daily autonomy reflection adjusts initiative gradually and writes reflection events for dashboard observability.

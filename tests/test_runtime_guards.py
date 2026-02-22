@@ -489,3 +489,31 @@ def test_openapi_adapter_can_run_without_telegram() -> None:
     assert "/v1/chat/completions" in adapter_source
     assert "Authorization" in adapter_source
     assert "async def process_message_api(" in handlers_source
+
+
+def test_autonomy_debate_reflection_layers_are_wired() -> None:
+    handlers_source = Path("her-core/her_telegram/handlers.py").read_text()
+    scheduler_source = Path("her-core/utils/scheduler.py").read_text()
+    autonomy_source = Path("her-core/utils/autonomy.py").read_text()
+    dashboard_source = Path("dashboard/app.py").read_text()
+    schema_source = Path("her-core/memory/schemas.sql").read_text()
+
+    assert "ACTION_MODE = \"ACTION_MODE\"" in handlers_source
+    assert "_run_internal_debate" in handlers_source
+    assert "Planner role for safe tool planning" in handlers_source
+    assert "Skeptic role for execution gating" in handlers_source
+    assert "Verifier role for post-execution validation" in handlers_source
+    assert "event_type=\"debate\"" in handlers_source
+    assert "event_type=\"internal_debate\"" in handlers_source
+    assert "autonomy_daily_reflection" in scheduler_source
+    assert "task_type == \"autonomy_reflection\"" in scheduler_source
+    assert "def _execute_autonomy_reflection_task" in scheduler_source
+    assert "while steps < min(self._max_steps, 5):" in Path("her-core/her_telegram/autonomous_operator.py").read_text()
+    assert "class AutonomyService" in autonomy_source
+    assert "engagement_score" in autonomy_source
+    assert "initiative_level" in autonomy_source
+    assert "CREATE TABLE IF NOT EXISTS proactive_daily_slots" in schema_source
+    assert "CREATE TABLE IF NOT EXISTS autonomy_profiles" in schema_source
+    assert "CREATE TABLE IF NOT EXISTS emotional_states" in schema_source
+    assert "parse_debate_events" in dashboard_source
+    assert "parse_reflection_events" in dashboard_source

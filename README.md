@@ -79,8 +79,11 @@ Detailed setup: `docs/installation.md`
 - Adaptive communication tendencies (concise/helpful/empathy/initiative)
 - Persisted reinforcement events and profile updates
 - Weekly self-optimization scheduler task
+- Dynamic autonomy profile (engagement score + initiative level)
+- Daily reflection loop with bounded initiative adjustment
+- Persistent emotional state (curious/reflective/playful/supportive/calm) with gradual decay
 - APScheduler persistent SQL job store (restart-safe schedules)
-- Optional daily proactive dispatcher (1-3 randomized messages/user with profile safeguards; disabled by default via `HER_PROACTIVE_MESSAGES_ENABLED=false`)
+- Optional daily proactive dispatcher with deterministic seeded timing, quiet-hour controls, and DB-enforced daily cap (disabled by default via `HER_PROACTIVE_MESSAGES_ENABLED=false`)
 
 ### Agent Architecture (CrewAI)
 
@@ -95,6 +98,7 @@ Detailed setup: `docs/installation.md`
 - Web/code/file operations with container isolation
 - Built-in network/security diagnostics in sandbox
 - Runtime safety guards: timeout, CPU/memory caps, controlled execution loop
+- Internal Planner/Skeptic/Verifier debate before action execution
 
 ### Dual-Mode Interface
 

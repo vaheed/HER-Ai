@@ -133,5 +133,62 @@ CREATE TABLE IF NOT EXISTS proactive_message_audit (
     message_kind TEXT NOT NULL,
     mood TEXT NOT NULL,
     success BOOLEAN NOT NULL DEFAULT FALSE,
+    day_bucket DATE NOT NULL DEFAULT CURRENT_DATE,
+    daily_slot SMALLINT,
     details JSONB
+);
+
+ALTER TABLE proactive_message_audit
+ADD COLUMN IF NOT EXISTS day_bucket DATE NOT NULL DEFAULT CURRENT_DATE;
+
+ALTER TABLE proactive_message_audit
+ADD COLUMN IF NOT EXISTS daily_slot SMALLINT;
+
+CREATE UNIQUE INDEX IF NOT EXISTS proactive_daily_slot_unique
+ON proactive_message_audit (user_id, day_bucket, daily_slot)
+WHERE daily_slot IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS autonomy_profiles (
+    user_id TEXT PRIMARY KEY REFERENCES users(user_id),
+    engagement_score DOUBLE PRECISION NOT NULL DEFAULT 0.5,
+    initiative_level DOUBLE PRECISION NOT NULL DEFAULT 0.5,
+    last_proactive_at TIMESTAMPTZ,
+    messages_sent_today INTEGER NOT NULL DEFAULT 0,
+    proactive_day DATE,
+    error_count_today INTEGER NOT NULL DEFAULT 0,
+    last_user_message_at TIMESTAMPTZ,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT autonomy_profiles_engagement_bounds CHECK (engagement_score >= 0.1 AND engagement_score <= 1.0),
+    CONSTRAINT autonomy_profiles_initiative_bounds CHECK (initiative_level >= 0.1 AND initiative_level <= 1.0)
+);
+
+CREATE TABLE IF NOT EXISTS emotional_states (
+    user_id TEXT PRIMARY KEY REFERENCES users(user_id),
+    current_mood TEXT NOT NULL DEFAULT 'calm',
+    mood_intensity DOUBLE PRECISION NOT NULL DEFAULT 0.5,
+    last_updated TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    shift_date DATE,
+    shifts_today INTEGER NOT NULL DEFAULT 0,
+    CONSTRAINT emotional_states_intensity_bounds CHECK (mood_intensity >= 0.1 AND mood_intensity <= 1.0)
+);
+
+CREATE TABLE IF NOT EXISTS autonomy_reflections (
+    reflection_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id TEXT REFERENCES users(user_id),
+    reflection_date DATE NOT NULL,
+    engagement_trend TEXT NOT NULL,
+    initiative_adjustment DOUBLE PRECISION NOT NULL,
+    notes TEXT NOT NULL,
+    confidence TEXT NOT NULL DEFAULT 'medium',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (user_id, reflection_date)
+);
+
+CREATE TABLE IF NOT EXISTS proactive_daily_slots (
+    user_id TEXT NOT NULL REFERENCES users(user_id),
+    day_bucket DATE NOT NULL,
+    slot SMALLINT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (user_id, day_bucket, slot),
+    CONSTRAINT proactive_daily_slot_range CHECK (slot >= 1 AND slot <= 3)
 );

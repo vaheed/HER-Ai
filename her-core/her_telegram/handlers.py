@@ -27,6 +27,7 @@ from utils.decision_log import DecisionLogger
 from utils.llm_factory import build_llm
 from utils.metrics import HERMetrics
 from utils.reinforcement import ReinforcementEngine
+from utils.autonomy import AutonomyService
 from utils.schedule_helpers import (
     extract_json_object,
     interval_unit_to_base,
@@ -216,7 +217,7 @@ class MessageHandlers:
         self._autonomous_operator = AutonomousSandboxOperator(
             llm_invoke=self._generate_response_with_failover,
             container_name=sandbox_container_name,
-            max_steps=int(os.getenv("HER_AUTONOMOUS_MAX_STEPS", "16")),
+            max_steps=int(os.getenv("HER_AUTONOMOUS_MAX_STEPS", "5")),
             command_timeout_seconds=int(os.getenv("HER_SANDBOX_COMMAND_TIMEOUT_SECONDS", "60")),
             cpu_time_limit_seconds=int(os.getenv("HER_SANDBOX_CPU_TIME_LIMIT_SECONDS", "20")),
             memory_limit_mb=int(os.getenv("HER_SANDBOX_MEMORY_LIMIT_MB", "512")),
@@ -226,9 +227,11 @@ class MessageHandlers:
         self._decision_logger = DecisionLogger()
         self._reinforcement = ReinforcementEngine()
         self._user_profiles = UserProfileStore(default_timezone=DEFAULT_USER_TIMEZONE)
+        self._autonomy = AutonomyService()
         self._workflow_event_hub = workflow_event_hub
         self._metrics: HERMetrics | None = None
         try:
+            self._autonomy.ensure_tables()
             self._metrics = HERMetrics(
                 host=os.getenv("REDIS_HOST", "redis"),
                 port=int(os.getenv("REDIS_PORT", "6379")),
@@ -2471,6 +2474,38 @@ class MessageHandlers:
                 False,
             )
 
+        debate = self._run_internal_debate(
+            user_id=user_id,
+            message=message,
+            user_language=user_language,
+            previous_context=previous_context,
+        )
+        self._emit_workflow_event(
+            execution_id=execution_id,
+            event_type="debate",
+            node_id="tool_selector",
+            status="success",
+            details={
+                "event": "debate",
+                "planner": debate.get("planner", {}),
+                "skeptic": debate.get("skeptic", {}),
+                "decision": "approved" if debate.get("approved", False) else "rejected",
+            },
+        )
+        self._decision_logger.log(
+            event_type="internal_debate",
+            summary=f"Planner/Skeptic decision for user {user_id}",
+            user_id=str(user_id),
+            source="telegram",
+            details=debate,
+        )
+        if not bool(debate.get("approved", False)):
+            fallback = str(
+                debate.get("skeptic", {}).get("notes")
+                or "I need a clearer, verifiable action request before running tools."
+            )
+            return self._render_in_user_language(user_id, user_language, fallback)[:3900], False
+
         self._emit_workflow_event(
             execution_id=execution_id,
             event_type="step_start",
@@ -2504,8 +2539,177 @@ class MessageHandlers:
             on_step_event=_on_step_event,
         )
         final_text = str(result.get("result", "")).strip() or "Completed."
+        verifier = self._verifier_review(
+            user_id=user_id,
+            message=message,
+            user_language=user_language,
+            operator_result=final_text,
+        )
+        self._decision_logger.log(
+            event_type="verifier_result",
+            summary=f"Verifier completed for user {user_id}",
+            user_id=str(user_id),
+            source="telegram",
+            details=verifier,
+        )
+        self._emit_workflow_event(
+            execution_id=execution_id,
+            event_type="debate",
+            node_id="tool_executor",
+            status="success" if bool(verifier.get("verified", False)) else "error",
+            details={
+                "event": "debate",
+                "verifier": verifier,
+                "decision": "approved" if bool(verifier.get("verified", False)) else "rejected",
+            },
+        )
+        if not bool(verifier.get("verified", False)):
+            final_text = str(verifier.get("notes") or "Execution result could not be verified safely.")
         response = self._render_in_user_language(user_id, user_language, final_text)
-        return response[:3900], True
+        return response[:3900], bool(verifier.get("verified", False))
+
+    def _run_internal_debate(
+        self,
+        *,
+        user_id: int,
+        message: str,
+        user_language: str,
+        previous_context: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        planner = self._planner_proposal(user_id=user_id, message=message, user_language=user_language, previous_context=previous_context)
+        skeptic = self._skeptic_review(
+            user_id=user_id,
+            user_language=user_language,
+            message=message,
+            planner=planner,
+        )
+        approved = bool(skeptic.get("approved", False)) and bool(planner.get("tool_required", True))
+        return {"planner": planner, "skeptic": skeptic, "approved": approved}
+
+    def _planner_proposal(
+        self,
+        *,
+        user_id: int,
+        message: str,
+        user_language: str,
+        previous_context: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        context_preview = "\n".join(
+            f"{str(row.get('role', 'user'))}: {str(row.get('message', ''))[:140]}" for row in previous_context[-8:]
+        )
+        prompt = (
+            "You are Planner.\n"
+            "Return strict JSON only with keys: tool_required (bool), action (string), assumptions (array), risk (low|medium|high).\n"
+            f"Language: {user_language}\n"
+            f"User message: {message}\n"
+            f"Recent context:\n{context_preview or '(none)'}"
+        )
+        try:
+            raw, _ = self._generate_response_with_failover(
+                [SystemMessage(content="Planner role for safe tool planning. JSON only."), HumanMessage(content=prompt)],
+                user_id,
+            )
+            parsed = extract_json_object(raw)
+            if isinstance(parsed, dict):
+                return {
+                    "tool_required": bool(parsed.get("tool_required", True)),
+                    "action": str(parsed.get("action", "sandbox_execute")),
+                    "assumptions": list(parsed.get("assumptions", [])) if isinstance(parsed.get("assumptions"), list) else [],
+                    "risk": str(parsed.get("risk", "medium")),
+                }
+        except Exception:  # noqa: BLE001
+            pass
+        return {
+            "tool_required": True,
+            "action": "sandbox_execute",
+            "assumptions": ["User intent is explicit action request."],
+            "risk": "medium",
+        }
+
+    def _skeptic_review(
+        self,
+        *,
+        user_id: int,
+        user_language: str,
+        message: str,
+        planner: dict[str, Any],
+    ) -> dict[str, Any]:
+        prompt = (
+            "You are Skeptic.\n"
+            "Evaluate planner proposal for safety and hallucination risk.\n"
+            "Return strict JSON with keys: approved (bool), tool_needed (bool), assumption_safe (bool), "
+            "hallucination_risk (low|medium|high), notes (string).\n"
+            f"Language: {user_language}\n"
+            f"User message: {message}\n"
+            f"Planner JSON: {json.dumps(planner, ensure_ascii=True)}"
+        )
+        try:
+            raw, _ = self._generate_response_with_failover(
+                [SystemMessage(content="Skeptic role for execution gating. JSON only."), HumanMessage(content=prompt)],
+                user_id,
+            )
+            parsed = extract_json_object(raw)
+            if isinstance(parsed, dict):
+                risk = str(parsed.get("hallucination_risk", "medium")).strip().lower()
+                approved = bool(parsed.get("approved", False)) and risk in {"low", "medium"}
+                if not bool(planner.get("tool_required", True)):
+                    approved = False
+                return {
+                    "approved": approved,
+                    "tool_needed": bool(parsed.get("tool_needed", True)),
+                    "assumption_safe": bool(parsed.get("assumption_safe", False)),
+                    "hallucination_risk": risk,
+                    "notes": str(parsed.get("notes", "")),
+                }
+        except Exception:  # noqa: BLE001
+            pass
+
+        obvious_risky = bool(_GREETING_PATTERN.match(message)) or len(message.strip()) < 6
+        return {
+            "approved": not obvious_risky,
+            "tool_needed": True,
+            "assumption_safe": not obvious_risky,
+            "hallucination_risk": "high" if obvious_risky else "medium",
+            "notes": "Rejected because request is too vague for safe execution." if obvious_risky else "Approved with bounded sandbox execution.",
+        }
+
+    def _verifier_review(
+        self,
+        *,
+        user_id: int,
+        message: str,
+        user_language: str,
+        operator_result: str,
+    ) -> dict[str, Any]:
+        prompt = (
+            "You are Verifier.\n"
+            "Return strict JSON: verified (bool), confidence (0..1), notes (string).\n"
+            f"Language: {user_language}\n"
+            f"User request: {message}\n"
+            f"Execution result: {operator_result[:1500]}"
+        )
+        try:
+            raw, _ = self._generate_response_with_failover(
+                [SystemMessage(content="Verifier role for post-execution validation. JSON only."), HumanMessage(content=prompt)],
+                user_id,
+            )
+            parsed = extract_json_object(raw)
+            if isinstance(parsed, dict):
+                confidence = float(parsed.get("confidence", 0.0) or 0.0)
+                verified = bool(parsed.get("verified", False)) and confidence >= 0.45
+                return {
+                    "verified": verified,
+                    "confidence": round(confidence, 3),
+                    "notes": str(parsed.get("notes", "")),
+                }
+        except Exception:  # noqa: BLE001
+            pass
+        fallback_verified = bool(operator_result.strip())
+        return {
+            "verified": fallback_verified,
+            "confidence": 0.5 if fallback_verified else 0.1,
+            "notes": "Verified by fallback non-empty output check." if fallback_verified else "Execution returned empty result.",
+        }
 
     async def process_message_api(
         self,
@@ -2560,6 +2764,20 @@ class MessageHandlers:
         user_language = self._detect_user_language(message, user_id, previous_context)
         self._capture_profile_from_message(user_id, message, user_language)
         self._user_profiles.upsert_personalization_profile(user_id=user_id, preferred_language=user_language)
+        autonomy_before = self._autonomy.get_profile(str(user_id))
+        response_seconds = None
+        if autonomy_before.last_proactive_at is not None:
+            response_seconds = (datetime.now(UTC) - autonomy_before.last_proactive_at).total_seconds()
+        autonomy_signals = self._autonomy.record_user_message(
+            user_id=str(user_id),
+            message=message,
+            user_initiated=response_seconds is None or response_seconds >= 6 * 3600,
+            response_seconds=response_seconds,
+        )
+        if bool(autonomy_signals.get("disabled")):
+            self._user_profiles.upsert_personalization_profile(user_id=user_id, proactive_opt_out=True)
+        elif "/unmute" in message.lower() or "enable proactive" in message.lower():
+            self._user_profiles.upsert_personalization_profile(user_id=user_id, proactive_opt_out=False)
 
         if not self.is_admin(user_id) and not self.rate_limiter.is_allowed(user_id):
             response = self._render_in_user_language(user_id, user_language, "⏱️ Please slow down a bit!")
@@ -2878,6 +3096,20 @@ class MessageHandlers:
         user_language = self._detect_user_language(message, user_id, previous_context)
         self._capture_profile_from_message(user_id, message, user_language)
         self._user_profiles.upsert_personalization_profile(user_id=user_id, preferred_language=user_language)
+        autonomy_before = self._autonomy.get_profile(str(user_id))
+        response_seconds = None
+        if autonomy_before.last_proactive_at is not None:
+            response_seconds = (datetime.now(UTC) - autonomy_before.last_proactive_at).total_seconds()
+        autonomy_signals = self._autonomy.record_user_message(
+            user_id=str(user_id),
+            message=message,
+            user_initiated=response_seconds is None or response_seconds >= 6 * 3600,
+            response_seconds=response_seconds,
+        )
+        if bool(autonomy_signals.get("disabled")):
+            self._user_profiles.upsert_personalization_profile(user_id=user_id, proactive_opt_out=True)
+        elif "/unmute" in message.lower() or "enable proactive" in message.lower():
+            self._user_profiles.upsert_personalization_profile(user_id=user_id, proactive_opt_out=False)
 
         if not self.is_admin(user_id) and not self.rate_limiter.is_allowed(user_id):
             await self._reply(

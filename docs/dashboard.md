@@ -36,6 +36,9 @@ Charts use Plotly for responsive, interactive visuals (zoom, pan, hover, legend 
 ### ⏰ Jobs Page
 - **Scheduled Job History**: View all scheduled task executions
 - **Upcoming Jobs**: Live upcoming schedule from `her:scheduler:state`
+- **Autonomy Snapshot**: Engagement score, initiative level, mood, and daily proactive target
+- **Debate Trace**: Planner/Skeptic/Verifier decision stream for action requests
+- **Daily Reflection Feed**: Reflection events with initiative adjustments and notes
 - **Job Details**: Name, type, interval, execution time, results
 - **Job Configuration**: View and manage scheduled tasks
 - **Next Run Times**: See when jobs will execute next
@@ -43,6 +46,7 @@ Charts use Plotly for responsive, interactive visuals (zoom, pan, hover, legend 
 ### 🧾 Decisions Page
 - **Decision Audit Trail**: View runtime decisions and actions from Redis key `her:decision:logs`
 - **Transparency Metrics**: Breakdown of decision event types (scheduler, capability probes, reply generation)
+- **Autonomy Trend**: Engagement and initiative trend lines over time
 - **Debugging Support**: Correlate decisions with logs and job outcomes
 - **Reinforcement Traceability**: Reinforcement scoring decisions appear as `reinforcement_event` entries
 
@@ -121,8 +125,11 @@ USER_TIMEZONE=UTC
 - `her:decision:logs` with `event_type=sandbox_execution` - Fallback sandbox execution feed when direct list entries are unavailable
 - `her:scheduler:jobs` - Scheduled job history (last 100)
 - `her:scheduler:state` - Scheduler runtime state and upcoming jobs
+- `her:scheduler:state` field `autonomy` - Current user-level autonomy/mood snapshot
 - `her:decision:logs` with `event_type=reminder_state_change` - Reminder lifecycle transitions
 - `her:decision:logs` with `event_type=timezone_conversion` - Reminder local-time to UTC conversion audit
+- `her:decision:logs` with `event_type=internal_debate`/`verifier_result` - internal cognitive debate visibility
+- `her:decision:logs` with `event_type=reflection` - daily self-reflection events
 - `her:decision:logs` - Runtime decision log feed (last 500)
 - `her:reinforcement:events` - Reinforcement score/event history (last 1000)
 - `her:runtime:capabilities` - Latest startup capability snapshot (internet/sandbox/MCP)

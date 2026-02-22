@@ -55,7 +55,7 @@ Configuration is driven by environment variables in `.env` and YAML files under 
 | `ADMIN_USER_ID` | - | Comma-safe admin ID list source (single env entry accepted) |
 | `TELEGRAM_PUBLIC_APPROVAL_REQUIRED` | `true` | Require approval for public users |
 | `TELEGRAM_PUBLIC_RATE_LIMIT_PER_MINUTE` | `20` | Public user rate limit |
-| `HER_AUTONOMOUS_MAX_STEPS` | `16` | Max autonomous action steps per request |
+| `HER_AUTONOMOUS_MAX_STEPS` | `5` | Max autonomous action steps per request (hard-capped to prevent runaway loops) |
 | `HER_SANDBOX_COMMAND_TIMEOUT_SECONDS` | `60` | Sandbox command timeout |
 | `HER_ACTION_INTENT_THRESHOLD` | `0.8` | Minimum confidence required to switch from chat mode to action mode |
 | `HER_SANDBOX_CPU_TIME_LIMIT_SECONDS` | `20` | Sandbox CPU time cap |

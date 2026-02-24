@@ -23,3 +23,33 @@ def test_drift_respects_single_step_and_bounds() -> None:
     assert updated.warmth == 0.78
     assert 0.1 <= updated.curiosity <= 0.95
     assert 0.1 <= updated.warmth <= 0.95
+
+
+def test_drift_respects_weekly_cap() -> None:
+    baseline = build_vector()
+    engine = DriftEngine(baseline)
+
+    current = baseline
+    for _ in range(10):
+        current = engine.apply_feedback(current, {"curiosity": 0.02})
+
+    assert current.curiosity == 0.83
+
+
+def test_weekly_regression_pulls_traits_toward_baseline() -> None:
+    baseline = build_vector()
+    engine = DriftEngine(baseline)
+    drifted = PersonalityVector(
+        curiosity=0.83,
+        warmth=0.72,
+        directness=0.7,
+        playfulness=0.6,
+        seriousness=0.55,
+        empathy=0.85,
+        skepticism=0.45,
+    )
+
+    regressed = engine.weekly_regress(drifted)
+
+    assert regressed.curiosity < drifted.curiosity
+    assert regressed.warmth > drifted.warmth

@@ -6,6 +6,7 @@ from her.guardrails.ethical_core import EthicalCore
 from her.memory.store import MemoryStore
 from her.memory.working import WorkingMemory
 from her.models import LLMRequest, LLMResponse
+from her.personality.manager import PersonalityManager
 from her.providers.fallback_router import FallbackRouter
 
 
@@ -18,11 +19,13 @@ class ConversationAgent:
         ethical_core: EthicalCore,
         memory_store: MemoryStore,
         working_memory: WorkingMemory,
+        personality_manager: PersonalityManager,
     ) -> None:
         self._router = router
         self._ethical_core = ethical_core
         self._memory_store = memory_store
         self._working = working_memory
+        self._personality = personality_manager
 
     async def respond(self, session_id: UUID, content: str, trace_id: str) -> LLMResponse:
         """Validate, store memory, call provider router, and validate output."""
@@ -35,10 +38,7 @@ class ConversationAgent:
 
         request = LLMRequest(
             messages=messages,
-            system_prompt=(
-                "You are HER, an honest AI companion. Be helpful, direct, and safe. "
-                "Never claim to be human and never provide harmful instructions."
-            ),
+            system_prompt=await self._personality.build_prompt_for_interaction(content),
             session_id=session_id,
             trace_id=trace_id,
         )

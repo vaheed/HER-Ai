@@ -10,3 +10,7 @@ emotion:
   state: calm
   intensity: 0.2
   decay_rate: 0.1
+drift_limits:
+  max_single_delta: 0.02
+  max_weekly_drift: 0.08
+  regression_rate: 0.3

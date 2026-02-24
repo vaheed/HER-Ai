@@ -1,15 +1,21 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 from uuid import UUID
 
 from sqlalchemy import Select, func, select
 
 from her.models import Episode
 from her.memory.db import MemoryDatabase
-from her.memory.models import EpisodeORM, GoalORM, LLMUsageLogORM, SemanticMemoryORM
-from her.memory.types import GoalRecord, SemanticMemoryRecord
+from her.memory.models import (
+    EpisodeORM,
+    GoalORM,
+    LLMUsageLogORM,
+    PersonalitySnapshotORM,
+    SemanticMemoryORM,
+)
+from her.memory.types import GoalRecord, PersonalitySnapshotRecord, SemanticMemoryRecord
 
 
 class MemoryStore:
@@ -234,6 +240,52 @@ class MemoryStore:
         async with self._database.session() as session:
             session.add(row)
             await session.commit()
+
+    async def create_personality_snapshot(
+        self,
+        traits: Dict[str, float],
+        emotional_baseline: Dict[str, float | str | None],
+        drift_delta: Optional[Dict[str, float]] = None,
+        trigger_summary: Optional[str] = None,
+    ) -> None:
+        """Persist a personality snapshot row."""
+
+        emotional_payload: Dict[str, Any] = dict(emotional_baseline)
+        row = PersonalitySnapshotORM(
+            traits=traits,
+            emotional_baseline=emotional_payload,
+            drift_delta=drift_delta,
+            trigger_summary=trigger_summary,
+        )
+        async with self._database.session() as session:
+            session.add(row)
+            await session.commit()
+
+    async def get_latest_personality_snapshot(self) -> Optional[PersonalitySnapshotRecord]:
+        """Return the latest persisted personality snapshot if available."""
+
+        stmt: Select[tuple[PersonalitySnapshotORM]] = (
+            select(PersonalitySnapshotORM).order_by(PersonalitySnapshotORM.snapshot_at.desc()).limit(1)
+        )
+        async with self._database.session() as session:
+            row = (await session.execute(stmt)).scalars().first()
+        if row is None:
+            return None
+
+        emotional_payload: Dict[str, float | str | None] = {
+            str(key): value for key, value in row.emotional_baseline.items()
+        }
+        drift_delta: Optional[Dict[str, float]] = None
+        if row.drift_delta is not None:
+            drift_delta = {str(key): float(value) for key, value in row.drift_delta.items()}
+
+        return PersonalitySnapshotRecord(
+            snapshot_at=row.snapshot_at,
+            traits={str(key): float(value) for key, value in row.traits.items()},
+            emotional_baseline=emotional_payload,
+            drift_delta=drift_delta,
+            trigger_summary=row.trigger_summary,
+        )
 
 
 

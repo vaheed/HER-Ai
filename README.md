@@ -8,7 +8,7 @@ Base implementation for HER, a local-first AI companion platform.
 - FastAPI service (`/health`, `/chat`, `/metrics`)
 - Provider abstraction with fallback routing: OpenAI -> Anthropic -> Ollama -> cache
 - Structured logging (`structlog`), Prometheus metrics, OpenTelemetry tracing setup
-- Personality vector, emotional overlay, drift engine
+- Phase 2 personality system: dynamic drift manager, emotional transition/decay, tone overlay, dynamic prompt builder
 - Phase 1 memory engine: SQLAlchemy async store, Alembic migrations, pgvector schema, Redis working memory
 - Guardrails and sandboxed tool runner
 - Docker and Docker Compose for local infrastructure

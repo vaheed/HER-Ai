@@ -34,6 +34,18 @@
 - [ ] End-to-end integration test against live Postgres+Redis in CI  
   Current state: unit-level and local app checks are green; no live service integration test job yet.
 
+### Phase 2 – Personality & Emotional Layer
+
+- [x] Personality baseline traits + drift limits config loaded from YAML
+- [x] Drift engine enforces per-interaction bounds and weekly cumulative caps
+- [x] Personality snapshot persisted before interaction drift and weekly regression
+- [x] Emotional transition + decay engine implemented
+- [x] Emotional overlay stacked with personality to produce final tone vector
+- [x] Dynamic personality-aware system prompt builder integrated into conversation flow
+- [x] Reflection path uses weekly regression via personality manager
+- [x] Unit tests added for drift edge cases, emotional overlay, and personality snapshot behavior
+- [x] Personality state reload from latest DB snapshot on service boot
+
 ---
 
 ## Core Architecture Improvements

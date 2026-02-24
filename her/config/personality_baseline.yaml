@@ -1,0 +1,12 @@
+traits:
+  curiosity: 0.75
+  warmth: 0.8
+  directness: 0.7
+  playfulness: 0.6
+  seriousness: 0.55
+  empathy: 0.85
+  skepticism: 0.45
+emotion:
+  state: calm
+  intensity: 0.2
+  decay_rate: 0.1

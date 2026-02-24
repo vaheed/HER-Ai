@@ -1,1 +1,0 @@
-"""HER Telegram bot package."""

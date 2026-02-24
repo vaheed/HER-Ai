@@ -7,6 +7,7 @@ from fastapi import FastAPI, Response
 from her.agents.conversation import ConversationAgent
 from her.agents.orchestrator import AgentOrchestrator
 from her.config.settings import get_settings
+from her.embeddings.service import EmbeddingService, build_embedding_provider
 from her.guardrails.ethical_core import EthicalCore
 from her.interfaces.api.middleware.request_id import RequestIDMiddleware
 from her.interfaces.api.routes.chat import router as chat_router
@@ -25,6 +26,7 @@ from her.personality.vector import (
     load_personality_baseline,
 )
 from her.providers.anthropic_provider import AnthropicProvider
+from her.providers.custom_provider import CustomProvider
 from her.providers.fallback_router import FallbackRouter
 from her.providers.ollama_provider import OllamaProvider
 from her.providers.openai_provider import OpenAIProvider
@@ -45,6 +47,7 @@ def create_app() -> FastAPI:
     providers = {
         "openai": OpenAIProvider(settings),
         "anthropic": AnthropicProvider(settings),
+        "custom": CustomProvider(settings),
         "ollama": OllamaProvider(settings),
     }
     ordered = [providers[name] for name in settings.provider_priority if name in providers]
@@ -66,6 +69,10 @@ def create_app() -> FastAPI:
         drift_engine=DriftEngine(baseline_personality, config=drift_config),
         snapshot_store=memory_store,
     )
+    embedding_service = EmbeddingService(
+        provider=build_embedding_provider(settings),
+        dimensions=settings.embedding_dimensions,
+    )
 
     conversation_agent = ConversationAgent(
         router=router,
@@ -73,6 +80,7 @@ def create_app() -> FastAPI:
         memory_store=memory_store,
         working_memory=working_memory,
         personality_manager=personality_manager,
+        embedding_service=embedding_service,
     )
     app.state.orchestrator = AgentOrchestrator(conversation_agent)
     app.state.memory_database = memory_database
@@ -81,6 +89,7 @@ def create_app() -> FastAPI:
     app.state.personality_baseline = baseline_personality
     app.state.emotional_baseline = baseline_emotion
     app.state.personality_manager = personality_manager
+    app.state.embedding_service = embedding_service
 
     app.include_router(health_router)
     app.include_router(chat_router)

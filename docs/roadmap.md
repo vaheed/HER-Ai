@@ -8,14 +8,13 @@
 ### Phase 0 – Foundation & DevOps
 
 - [x] Setup `pyproject.toml` with build/runtime/dev dependencies
-- [ ] Configure `pre-commit` hooks (`ruff`, `black`, `mypy`)  
-  Current state: lint/type/test tooling exists; pre-commit hook wiring not added yet.
+- [x] Configure `pre-commit` hooks (`ruff`, `black`, `mypy`)
 - [x] Docker Compose stack includes PostgreSQL 16 (`pgvector` image), Redis 7, Prometheus, Grafana, Jaeger
 - [x] Pydantic `BaseSettings` + `.env.example` + provider routing config
 - [x] Top-level package scaffold and module boundaries
 - [x] Structured logging (`structlog`) + OpenTelemetry tracing bootstrap + Prometheus metrics endpoint
 - [x] GitHub Actions test/deploy workflows
-- [x] LLM provider abstraction and fallback router (OpenAI, Anthropic, Ollama)
+- [x] LLM provider abstraction and fallback router (OpenAI, Anthropic, Custom Endpoint, Ollama)
 - [x] Hello flow script (`scripts/hello_her.py`)
 
 ### Phase 1 – Memory Engine
@@ -31,8 +30,7 @@
 - [x] Cost tracking persistence (`llm_usage_log`)
 - [x] API wired to persistent memory services
 - [x] Operational scripts for seeding/reflection/aging
-- [ ] End-to-end integration test against live Postgres+Redis in CI  
-  Current state: unit-level and local app checks are green; no live service integration test job yet.
+- [x] End-to-end integration test against live Postgres+Redis in CI
 
 ### Phase 2 – Personality & Emotional Layer
 
@@ -45,6 +43,16 @@
 - [x] Reflection path uses weekly regression via personality manager
 - [x] Unit tests added for drift edge cases, emotional overlay, and personality snapshot behavior
 - [x] Personality state reload from latest DB snapshot on service boot
+
+### Pre-Phase 3 Readiness (Production Preparation)
+
+- [x] Custom LLM provider added with configurable endpoint and model
+- [x] Embedding provider abstraction added (default `ollama`, optional `custom`)
+- [x] Conversation pipeline now stores episode embeddings through embedding service
+- [x] Docker Compose includes `ollama` runtime service
+- [x] Compose startup guarantees model bootstrap (`ollama-init`) before app starts
+- [x] Ollama chat model + embedding model pull configured via environment variables
+- [x] Dev/prod compose files aligned for dependency startup ordering
 
 ---
 
@@ -95,8 +103,14 @@ her/
 ├── providers/                   # NEW: provider abstraction layer
 │   ├── base.py
 │   ├── openai_provider.py
+│   ├── custom_provider.py
 │   ├── ollama_provider.py
 │   └── fallback_router.py
+├── embeddings/                  # NEW: embedding abstraction layer
+│   ├── base.py
+│   ├── ollama_provider.py
+│   ├── custom_provider.py
+│   └── service.py
 ├── interfaces/
 │   ├── telegram_bot.py
 │   ├── api/                     # FastAPI, not raw endpoints

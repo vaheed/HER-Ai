@@ -8,6 +8,37 @@ on:
 jobs:
   ci:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_DB: her
+          POSTGRES_USER: her
+          POSTGRES_PASSWORD: her
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U her -d her"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgresql+asyncpg://her:her@127.0.0.1:5432/her
+      REDIS_URL: redis://127.0.0.1:6379/0
+      OLLAMA_BASE_URL: http://127.0.0.1:11434
+      OLLAMA_MODEL: llama3.1:8b
+      OLLAMA_EMBEDDING_MODEL: nomic-embed-text
+      EMBEDDING_PROVIDER: ollama
+      EMBEDDING_DIMENSIONS: 1536
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -21,5 +52,7 @@ jobs:
         run: ruff check .
       - name: Typecheck
         run: mypy her
+      - name: Migrate
+        run: alembic upgrade head
       - name: Tests
         run: pytest -q

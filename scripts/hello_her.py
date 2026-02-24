@@ -7,6 +7,7 @@ from uuid import uuid4
 from her.config.settings import get_settings
 from her.models import LLMRequest
 from her.providers.anthropic_provider import AnthropicProvider
+from her.providers.custom_provider import CustomProvider
 from her.providers.fallback_router import FallbackRouter
 from her.providers.ollama_provider import OllamaProvider
 from her.providers.openai_provider import OpenAIProvider
@@ -17,7 +18,12 @@ async def main() -> None:
 
     settings = get_settings()
     router = FallbackRouter(
-        providers=[OpenAIProvider(settings), AnthropicProvider(settings), OllamaProvider(settings)],
+        providers=[
+            OpenAIProvider(settings),
+            AnthropicProvider(settings),
+            CustomProvider(settings),
+            OllamaProvider(settings),
+        ],
         timeout_seconds=settings.request_timeout_seconds,
     )
     response = await router.generate(

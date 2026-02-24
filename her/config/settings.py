@@ -30,10 +30,21 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""
     anthropic_model: str = "claude-3-5-sonnet-latest"
 
+    custom_llm_endpoint: str = ""
+    custom_llm_model: str = "custom-model"
+    custom_llm_api_key: str = ""
+
     ollama_base_url: str = "http://127.0.0.1:11434"
     ollama_model: str = "llama3.1:8b"
+    ollama_embedding_model: str = "nomic-embed-text"
 
-    provider_priority: List[str] = Field(default_factory=lambda: ["openai", "anthropic", "ollama"])
+    embedding_provider: str = "ollama"
+    embedding_dimensions: int = 1536
+    custom_embedding_endpoint: str = ""
+    custom_embedding_model: str = "custom-embedding-model"
+    custom_embedding_api_key: str = ""
+
+    provider_priority: List[str] = Field(default_factory=lambda: ["openai", "anthropic", "custom", "ollama"])
 
     @field_validator("provider_priority", mode="before")
     @classmethod
@@ -44,7 +55,16 @@ class Settings(BaseSettings):
             return [entry.strip() for entry in value.split(",") if entry.strip()]
         if isinstance(value, list):
             return [str(entry).strip() for entry in value if str(entry).strip()]
-        return ["openai", "anthropic", "ollama"]
+        return ["openai", "anthropic", "custom", "ollama"]
+
+    @field_validator("embedding_provider", mode="before")
+    @classmethod
+    def normalize_embedding_provider(cls, value: object) -> str:
+        """Normalize embedding provider name."""
+
+        if isinstance(value, str):
+            return value.strip().lower()
+        return "ollama"
 
 
 @lru_cache(maxsize=1)

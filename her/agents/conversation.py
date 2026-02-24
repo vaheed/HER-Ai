@@ -3,6 +3,7 @@ from __future__ import annotations
 from uuid import UUID
 
 from her.guardrails.ethical_core import EthicalCore
+from her.embeddings.service import EmbeddingService
 from her.memory.store import MemoryStore
 from her.memory.working import WorkingMemory
 from her.models import LLMRequest, LLMResponse
@@ -20,19 +21,26 @@ class ConversationAgent:
         memory_store: MemoryStore,
         working_memory: WorkingMemory,
         personality_manager: PersonalityManager,
+        embedding_service: EmbeddingService,
     ) -> None:
         self._router = router
         self._ethical_core = ethical_core
         self._memory_store = memory_store
         self._working = working_memory
         self._personality = personality_manager
+        self._embeddings = embedding_service
 
     async def respond(self, session_id: UUID, content: str, trace_id: str) -> LLMResponse:
         """Validate, store memory, call provider router, and validate output."""
 
         self._ethical_core.validate_user_content(content)
 
-        episode = await self._memory_store.add_episode(session_id=session_id, content=content)
+        embedding = await self._embeddings.embed(content)
+        episode = await self._memory_store.add_episode(
+            session_id=session_id,
+            content=content,
+            embedding=embedding,
+        )
         await self._working.append(session_id=session_id, role="user", content=content)
         messages = await self._working.get(session_id)
 

@@ -1,6 +1,7 @@
 priority:
   - openai
   - anthropic
+  - custom
   - ollama
 fallback_on:
   - timeout

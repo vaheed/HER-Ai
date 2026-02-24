@@ -8,6 +8,7 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://her:her@postgres:5432/her
       REDIS_URL: redis://redis:6379/0
+      OLLAMA_BASE_URL: http://ollama:11434
     ports:
       - "8000:8000"
     command: >
@@ -17,6 +18,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      ollama-init:
+        condition: service_completed_successfully
 
   postgres:
     image: pgvector/pgvector:pg16
@@ -44,6 +47,36 @@ services:
       timeout: 3s
       retries: 20
 
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  ollama-init:
+    image: curlimages/curl:8.12.1
+    environment:
+      OLLAMA_BASE_URL: http://ollama:11434
+      OLLAMA_CHAT_MODEL: ${OLLAMA_MODEL:-llama3.1:8b}
+      OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}
+    depends_on:
+      ollama:
+        condition: service_healthy
+    restart: "no"
+    command: >
+      sh -c '
+        set -eu;
+        until curl -fsS "$OLLAMA_BASE_URL/api/tags" >/dev/null; do sleep 2; done;
+        curl -fsS "$OLLAMA_BASE_URL/api/pull" -d "{\"name\":\"$OLLAMA_CHAT_MODEL\",\"stream\":false}";
+        curl -fsS "$OLLAMA_BASE_URL/api/pull" -d "{\"name\":\"$OLLAMA_EMBEDDING_MODEL\",\"stream\":false}";
+      '
+
   prometheus:
     image: prom/prometheus:latest
     ports:
@@ -61,3 +94,4 @@ services:
 
 volumes:
   pgdata:
+  ollama:

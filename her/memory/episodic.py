@@ -1,51 +1,47 @@
 from __future__ import annotations
 
-from datetime import datetime
-from typing import Dict, List
-from uuid import UUID, uuid4
+from typing import Dict, List, Optional
+from uuid import UUID
 
+from her.memory.store import MemoryStore
 from her.models import Episode
 
 
 class EpisodicMemoryStore:
-    """In-memory episodic memory store with async CRUD surface."""
+    """Episodic memory service backed by persistent MemoryStore."""
 
-    def __init__(self) -> None:
-        self._episodes: Dict[UUID, Episode] = {}
+    def __init__(self, memory_store: MemoryStore) -> None:
+        self._memory_store = memory_store
 
-    async def add_episode(self, session_id: UUID, content: str, importance_score: float = 0.5) -> Episode:
-        """Add a new episodic memory entry."""
+    async def add_episode(
+        self,
+        session_id: UUID,
+        content: str,
+        importance_score: float = 0.5,
+        emotional_valence: float = 0.0,
+        embedding: Optional[List[float]] = None,
+        metadata: Optional[Dict[str, str]] = None,
+    ) -> Episode:
+        """Persist a new episodic memory entry."""
 
-        episode = Episode(
-            id=uuid4(),
+        return await self._memory_store.add_episode(
             session_id=session_id,
-            timestamp=datetime.utcnow(),
             content=content,
-            embedding=None,
-            emotional_valence=0.0,
-            importance_score=max(0.0, min(1.0, importance_score)),
-            decay_factor=1.0,
-            archived=False,
-            metadata={},
+            importance_score=importance_score,
+            emotional_valence=emotional_valence,
+            embedding=embedding,
+            metadata=metadata,
         )
-        self._episodes[episode.id] = episode
-        return episode
 
-    async def list_session_episodes(self, session_id: UUID) -> List[Episode]:
-        """List episodic entries for a session."""
+    async def list_session_episodes(self, session_id: UUID, include_archived: bool = False) -> List[Episode]:
+        """List episodes for a session."""
 
-        return [episode for episode in self._episodes.values() if episode.session_id == session_id]
+        return await self._memory_store.list_session_episodes(
+            session_id=session_id,
+            include_archived=include_archived,
+        )
 
     async def decay_and_archive(self, daily_decay: float = 0.95) -> int:
-        """Apply decay to all episodes and archive stale low-importance records."""
+        """Apply decay and archive rules."""
 
-        archived = 0
-        for episode in self._episodes.values():
-            if episode.archived:
-                continue
-            new_decay = episode.decay_factor * daily_decay
-            episode.decay_factor = round(new_decay, 4)
-            if episode.decay_factor < 0.1 and episode.importance_score < 0.3:
-                episode.archived = True
-                archived += 1
-        return archived
+        return await self._memory_store.decay_and_archive_episodes(daily_decay=daily_decay)

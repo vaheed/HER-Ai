@@ -20,6 +20,9 @@ class Settings(BaseSettings):
     api_port: int = 8000
 
     request_timeout_seconds: float = 20.0
+    database_url: str = "postgresql+asyncpg://her:her@127.0.0.1:5432/her"
+    redis_url: str = "redis://127.0.0.1:6379/0"
+    working_memory_ttl_minutes: int = 30
 
     openai_api_key: str = ""
     openai_model: str = "gpt-4o-mini"

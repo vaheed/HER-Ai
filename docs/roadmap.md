@@ -3,6 +3,39 @@
 
 ---
 
+## Implementation Status (Updated: February 24, 2026)
+
+### Phase 0 – Foundation & DevOps
+
+- [x] Setup `pyproject.toml` with build/runtime/dev dependencies
+- [ ] Configure `pre-commit` hooks (`ruff`, `black`, `mypy`)  
+  Current state: lint/type/test tooling exists; pre-commit hook wiring not added yet.
+- [x] Docker Compose stack includes PostgreSQL 16 (`pgvector` image), Redis 7, Prometheus, Grafana, Jaeger
+- [x] Pydantic `BaseSettings` + `.env.example` + provider routing config
+- [x] Top-level package scaffold and module boundaries
+- [x] Structured logging (`structlog`) + OpenTelemetry tracing bootstrap + Prometheus metrics endpoint
+- [x] GitHub Actions test/deploy workflows
+- [x] LLM provider abstraction and fallback router (OpenAI, Anthropic, Ollama)
+- [x] Hello flow script (`scripts/hello_her.py`)
+
+### Phase 1 – Memory Engine
+
+- [x] Alembic setup and initial migration for production memory schema  
+  Implemented: `alembic.ini`, `her/memory/schema/env.py`, `her/memory/schema/versions/20260224_0001_initial_memory_schema.py`
+- [x] Async SQLAlchemy database layer (`MemoryDatabase`) and CRUD store (`MemoryStore`)
+- [x] Episodic CRUD via persistent store (`episodes` table)
+- [x] Semantic memory upsert + vector search interface (`semantic_memory` table)
+- [x] Redis Hash working memory with TTL + in-process fallback
+- [x] Consolidator service for overlapping semantic concepts
+- [x] Aging pipeline implementation (episodic decay/archive + semantic decay + dormant goals)
+- [x] Cost tracking persistence (`llm_usage_log`)
+- [x] API wired to persistent memory services
+- [x] Operational scripts for seeding/reflection/aging
+- [ ] End-to-end integration test against live Postgres+Redis in CI  
+  Current state: unit-level and local app checks are green; no live service integration test job yet.
+
+---
+
 ## Core Architecture Improvements
 
 Before diving into phases, here are the key architectural upgrades over the original plan:

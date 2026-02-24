@@ -1,1 +1,6 @@
-This directory is reserved for Alembic migrations for HER memory schemas.
+Alembic migrations for HER memory schemas.
+
+Useful commands:
+
+- `alembic upgrade head`
+- `alembic downgrade -1`

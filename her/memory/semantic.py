@@ -1,57 +1,56 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from datetime import datetime
-from typing import Dict, List
-from uuid import UUID, uuid4
+from typing import List, Optional
+from uuid import UUID
 
-
-@dataclass
-class SemanticMemoryRecord:
-    id: UUID
-    concept: str
-    summary: str
-    confidence: float = 1.0
-    source_episode_ids: List[UUID] = field(default_factory=list)
-    last_reinforced: datetime = field(default_factory=datetime.utcnow)
-    tags: List[str] = field(default_factory=list)
+from her.memory.store import MemoryStore
+from her.memory.types import SemanticMemoryRecord
 
 
 class SemanticMemoryStore:
-    """Simple in-memory semantic memory registry."""
+    """Semantic memory service backed by persistent MemoryStore."""
 
-    def __init__(self) -> None:
-        self._records: Dict[UUID, SemanticMemoryRecord] = {}
+    def __init__(self, memory_store: MemoryStore) -> None:
+        self._memory_store = memory_store
 
-    async def upsert_concept(self, concept: str, summary: str, episode_id: UUID) -> SemanticMemoryRecord:
-        """Create or reinforce a semantic concept record."""
+    async def upsert_concept(
+        self,
+        concept: str,
+        summary: str,
+        episode_id: UUID,
+        tags: Optional[List[str]] = None,
+        embedding: Optional[List[float]] = None,
+    ) -> SemanticMemoryRecord:
+        """Create or reinforce a semantic concept."""
 
-        for record in self._records.values():
-            if record.concept.lower() == concept.lower():
-                record.summary = summary
-                record.confidence = min(1.0, record.confidence + 0.05)
-                record.last_reinforced = datetime.utcnow()
-                if episode_id not in record.source_episode_ids:
-                    record.source_episode_ids.append(episode_id)
-                return record
-
-        record = SemanticMemoryRecord(
-            id=uuid4(),
+        return await self._memory_store.upsert_semantic_concept(
             concept=concept,
             summary=summary,
-            confidence=1.0,
-            source_episode_ids=[episode_id],
+            episode_id=episode_id,
+            tags=tags,
+            embedding=embedding,
         )
-        self._records[record.id] = record
-        return record
 
-    async def decay_confidence(self, weekly_decay: float = 0.05) -> None:
-        """Decay confidence for semantic records."""
+    async def search(
+        self,
+        query_embedding: List[float],
+        top_k: int = 5,
+        min_confidence: float = 0.0,
+    ) -> List[SemanticMemoryRecord]:
+        """Search semantically similar concepts by embedding distance."""
 
-        for record in self._records.values():
-            record.confidence = max(0.0, round(record.confidence - weekly_decay, 3))
+        return await self._memory_store.semantic_search(
+            query_embedding=query_embedding,
+            top_k=top_k,
+            min_confidence=min_confidence,
+        )
+
+    async def decay_confidence(self, weekly_decay: float = 0.05) -> int:
+        """Decay confidence for all semantic records."""
+
+        return await self._memory_store.decay_semantic_confidence(weekly_decay=weekly_decay)
 
     async def all_records(self) -> List[SemanticMemoryRecord]:
-        """Return all semantic memory records."""
+        """Return all semantic records."""
 
-        return list(self._records.values())
+        return await self._memory_store.list_semantic_records()

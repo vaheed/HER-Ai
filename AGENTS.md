@@ -1,11 +1,4 @@
-# HER – Master IDE Build Prompt
-
----
-
-```
-You are an expert Python engineer helping me build "HER" — a locally-hosted, 
-self-evolving AI companion with persistent memory, a dynamic personality system, 
-emotional overlay, reflection, and reinforcement learning over time.
+# HER–AI
 
 ## Project Overview
 

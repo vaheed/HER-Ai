@@ -14,7 +14,7 @@ Base implementation for HER, a local-first AI companion platform.
 - Phase 3 foundation: preprocessing + retrieval + token-budget conversation pipeline
 - Guardrails and sandboxed tool runner
 - Docker and Docker Compose for local infrastructure
-- Unit tests for drift, guardrails, fallback, settings, and working-memory fallback
+- Unit/integration/simulation tests for drift, guardrails, fallback, memory, and conversation pipeline
 
 ## Quickstart
 
@@ -37,6 +37,17 @@ Server defaults to `http://127.0.0.1:8000`.
 - `GET /state`
 - `GET /goals`
 - `WS /ws` (JSON payload with `session_id` and `content`)
+
+### Telegram bot
+
+```bash
+python scripts/run_telegram_bot.py
+```
+
+Supported commands:
+- `/reflect`
+- `/goals`
+- `/mood`
 
 ## Run with Docker Compose
 

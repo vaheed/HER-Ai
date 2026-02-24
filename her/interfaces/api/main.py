@@ -8,6 +8,7 @@ from fastapi import FastAPI, Response
 
 from her.agents.conversation import ConversationAgent
 from her.agents.orchestrator import AgentOrchestrator
+from her.agents.reflection import ReflectionAgent
 from her.agents.token_budget import TokenBudgetManager
 from her.config.settings import get_settings
 from her.embeddings.service import EmbeddingService, build_embedding_provider
@@ -113,6 +114,7 @@ def create_app() -> FastAPI:
     app.add_middleware(RequestIDMiddleware)
 
     app.state.orchestrator = AgentOrchestrator(conversation_agent)
+    app.state.reflection_agent = ReflectionAgent(memory_store, personality_manager)
     app.state.memory_database = memory_database
     app.state.memory_store = memory_store
     app.state.working_memory = working_memory

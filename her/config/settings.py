@@ -47,6 +47,7 @@ class Settings(BaseSettings):
     semantic_top_k: int = 5
     recent_episode_limit: int = 8
     active_goal_limit: int = 5
+    telegram_bot_token: str = ""
 
     provider_priority: List[str] = Field(default_factory=lambda: ["openai", "anthropic", "custom", "ollama"])
 

@@ -54,7 +54,7 @@
 - [x] Ollama chat model + embedding model pull configured via environment variables
 - [x] Dev/prod compose files aligned for dependency startup ordering
 
-### Phase 3 – Conversation Agent (In Progress)
+### Phase 3 – Conversation Agent
 
 - [x] Input preprocessing pipeline added (sanitize, sentiment, intent, entities, bias signals)
 - [x] Retrieval pipeline integrated (semantic memory, recent episodes, active goals)
@@ -63,10 +63,8 @@
 - [x] Event emission integrated for interaction, memory update, and response generation
 - [x] REST endpoints added: `POST /chat`, `GET /memory/search`, `GET /state`, `GET /goals`
 - [x] WebSocket endpoint added: `GET /ws` (JSON request/response loop)
-- [ ] Telegram Bot command handlers (`/reflect`, `/goals`, `/mood`)  
-  Current state: interface boundary exists; command-handled bot runtime not integrated yet.
-- [ ] End-to-end conversation pipeline simulation tests  
-  Current state: unit coverage exists for preprocessing/token budget/routes; simulation suite pending.
+- [x] Telegram Bot command handlers (`/reflect`, `/goals`, `/mood`)
+- [x] End-to-end conversation pipeline simulation tests
 
 ---
 

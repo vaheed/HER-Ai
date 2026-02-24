@@ -24,6 +24,7 @@ dependencies = [
   "redis>=5.0.0",
   "SQLAlchemy>=2.0.29",
   "structlog>=24.1.0",
+  "python-telegram-bot>=21.7",
   "uvicorn>=0.29.0",
 ]
 

@@ -72,7 +72,7 @@ class WorkingMemory:
         if client is None:
             return
 
-        event_payload: Dict[str, str] = {"type": event_type, **payload}
+        event_payload: Dict[str, str] = {"event": event_type, **payload}
         await _await_maybe(client.xadd(self._stream_name, cast(Dict[Any, Any], event_payload)))
 
     async def close(self) -> None:

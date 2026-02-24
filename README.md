@@ -1,22 +1,36 @@
 # HER AI
 
-Base implementation for HER, a local-first AI companion platform.
+HER is a production-oriented, local-first AI companion platform with persistent memory, dynamic personality, emotional modulation, provider fallback routing, and multiple interfaces (REST, WebSocket, Telegram).
 
-## What is included
+Repository: https://github.com/vaheed/her-ai
+Contact: me@vaheed.net
 
-- Async Python package scaffold matching the HER architecture
-- FastAPI service (`/health`, `/chat`, `/metrics`)
-- Provider abstraction with fallback routing: OpenAI -> Anthropic -> Custom Endpoint -> Ollama -> cache
-- Embedding providers with pluggable interface (default: Ollama embeddings)
-- Structured logging (`structlog`), Prometheus metrics, OpenTelemetry tracing setup
-- Phase 2 personality system: dynamic drift manager, emotional transition/decay, tone overlay, dynamic prompt builder
-- Phase 1 memory engine: SQLAlchemy async store, Alembic migrations, pgvector schema, Redis working memory
-- Phase 3 foundation: preprocessing + retrieval + token-budget conversation pipeline
-- Guardrails and sandboxed tool runner
-- Docker and Docker Compose for local infrastructure
-- Unit/integration/simulation tests for drift, guardrails, fallback, memory, and conversation pipeline
+## Status
 
-## Quickstart
+Phase 0, Phase 1, Phase 2, and Phase 3 are implemented and validated with automated tests.
+
+Current implementation includes:
+- Async Python architecture (FastAPI + async SQLAlchemy + Redis)
+- Multi-provider LLM routing (`openai -> anthropic -> custom -> ollama -> cache`)
+- Embedding providers (`ollama` default, optional `custom`)
+- PostgreSQL + pgvector memory schema via Alembic
+- Personality drift engine + emotional overlay + prompt builder
+- Conversation pipeline with preprocessing, retrieval, token budgeting, and event emission
+- REST + WebSocket APIs and Telegram bot command handlers
+- Unit, integration, and simulation test suites
+
+## Documentation
+
+- [Documentation Index](docs/README.md)
+- [Architecture](docs/architecture.md)
+- [API Reference](docs/api-reference.md)
+- [Deployment Guide](docs/deployment.md)
+- [Testing and Quality](docs/testing-and-quality.md)
+- [Operations Runbook](docs/operations-runbook.md)
+- [Release Readiness](docs/release-readiness.md)
+- [Roadmap and Phase Status](docs/roadmap.md)
+
+## Quickstart (Local)
 
 ```bash
 python3 -m venv .venv
@@ -30,15 +44,40 @@ python main.py
 
 Server defaults to `http://127.0.0.1:8000`.
 
-### API surface
+## Docker
 
+Development:
+
+```bash
+docker compose -f docker/docker-compose.yml up --build
+```
+
+Production-like stack:
+
+```bash
+docker compose -f docker/docker-compose.prod.yml up --build -d
+```
+
+Both compose files include:
+- PostgreSQL 16 + pgvector
+- Redis 7
+- Ollama service
+- `ollama-init` bootstrap job that pulls chat + embedding models before app starts
+
+## Runtime Interfaces
+
+REST API:
 - `POST /chat`
 - `GET /memory/search?q=...`
 - `GET /state`
 - `GET /goals`
-- `WS /ws` (JSON payload with `session_id` and `content`)
+- `GET /health`
+- `GET /metrics`
 
-### Telegram bot
+WebSocket:
+- `WS /ws` JSON request/response loop
+
+Telegram bot:
 
 ```bash
 python scripts/run_telegram_bot.py
@@ -49,30 +88,38 @@ Supported commands:
 - `/goals`
 - `/mood`
 
-## Run with Docker Compose
+## Environment Configuration
+
+Use [`.env.example`](.env.example) as the template.
+
+Highlights:
+- `PROVIDER_PRIORITY` controls LLM fallback order
+- `EMBEDDING_PROVIDER` controls embedding backend (`ollama|custom|none`)
+- `CONVERSATION_TOKEN_BUDGET`, `SEMANTIC_TOP_K`, `RECENT_EPISODE_LIMIT`, `ACTIVE_GOAL_LIMIT` tune the Phase 3 pipeline
+
+## Quality Gates
 
 ```bash
-docker compose -f docker/docker-compose.yml up --build
+python3 -m ruff check .
+python3 -m mypy her
+pytest -q
 ```
 
-The compose stack includes `ollama` and an `ollama-init` bootstrap service that pulls both chat and embedding models before the app starts.
-
-## Notes
-
-- If no provider keys are set, router will try Ollama (`OLLAMA_BASE_URL`) and then cached response fallback.
-- Configure custom LLM endpoint with `CUSTOM_LLM_ENDPOINT` and `CUSTOM_LLM_MODEL`.
-- Configure embedding backend with `EMBEDDING_PROVIDER` (`ollama`, `custom`, or `none`).
-- Run schema migrations any time with `alembic upgrade head`.
-- Run daily aging pipeline with `python scripts/run_memory_aging.py`.
-- For a local smoke test of the provider pipeline, run:
-
-```bash
-python scripts/hello_her.py
-```
-
-## Pre-commit
+Optional pre-commit:
 
 ```bash
 pre-commit install
 pre-commit run --all-files
 ```
+
+## Production Notes
+
+- Keep secrets out of git and use an external secrets manager in production.
+- Run Alembic migrations before each deploy (`alembic upgrade head`).
+- Pin model versions for reproducible behavior.
+- Keep backup/restore policies for PostgreSQL and monitoring/alerting enabled.
+
+## Contributing and License
+
+- Contributing guide: [CONTRIBUTING.md](CONTRIBUTING.md)
+- License: [MIT](LICENSE)

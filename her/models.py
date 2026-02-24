@@ -67,3 +67,33 @@ class ChatResponse(BaseModel):
     model: str
     cost_usd: float
     trace_id: str
+
+
+class SemanticMemoryItem(BaseModel):
+    id: UUID
+    concept: str
+    summary: str
+    confidence: float
+    tags: List[str]
+    last_reinforced: datetime
+
+
+class MemorySearchResponse(BaseModel):
+    query: str
+    items: List[SemanticMemoryItem]
+
+
+class GoalResponse(BaseModel):
+    id: UUID
+    description: str
+    status: str
+    priority: float
+    created_at: datetime
+    last_progressed: Optional[datetime]
+
+
+class StateResponse(BaseModel):
+    personality: PersonalityVector
+    emotion: EmotionalState
+    provider_priority: List[str]
+    embedding_provider: str

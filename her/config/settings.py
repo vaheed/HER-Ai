@@ -43,6 +43,10 @@ class Settings(BaseSettings):
     custom_embedding_endpoint: str = ""
     custom_embedding_model: str = "custom-embedding-model"
     custom_embedding_api_key: str = ""
+    conversation_token_budget: int = 1800
+    semantic_top_k: int = 5
+    recent_episode_limit: int = 8
+    active_goal_limit: int = 5
 
     provider_priority: List[str] = Field(default_factory=lambda: ["openai", "anthropic", "custom", "ollama"])
 

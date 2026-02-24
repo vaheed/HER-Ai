@@ -11,6 +11,7 @@ Base implementation for HER, a local-first AI companion platform.
 - Structured logging (`structlog`), Prometheus metrics, OpenTelemetry tracing setup
 - Phase 2 personality system: dynamic drift manager, emotional transition/decay, tone overlay, dynamic prompt builder
 - Phase 1 memory engine: SQLAlchemy async store, Alembic migrations, pgvector schema, Redis working memory
+- Phase 3 foundation: preprocessing + retrieval + token-budget conversation pipeline
 - Guardrails and sandboxed tool runner
 - Docker and Docker Compose for local infrastructure
 - Unit tests for drift, guardrails, fallback, settings, and working-memory fallback
@@ -28,6 +29,14 @@ python main.py
 ```
 
 Server defaults to `http://127.0.0.1:8000`.
+
+### API surface
+
+- `POST /chat`
+- `GET /memory/search?q=...`
+- `GET /state`
+- `GET /goals`
+- `WS /ws` (JSON payload with `session_id` and `content`)
 
 ## Run with Docker Compose
 

@@ -71,6 +71,22 @@ class MemoryStore:
 
         return [_episode_from_orm(row) for row in rows]
 
+    async def list_recent_episodes(self, session_id: UUID, limit: int = 8) -> List[Episode]:
+        """Return most recent episodes for session in chronological order."""
+
+        stmt: Select[tuple[EpisodeORM]] = (
+            select(EpisodeORM)
+            .where(EpisodeORM.session_id == session_id)
+            .where(EpisodeORM.archived.is_(False))
+            .order_by(EpisodeORM.timestamp.desc())
+            .limit(max(1, limit))
+        )
+        async with self._database.session() as session:
+            rows = (await session.execute(stmt)).scalars().all()
+
+        ordered = list(reversed(rows))
+        return [_episode_from_orm(row) for row in ordered]
+
     async def upsert_semantic_concept(
         self,
         concept: str,
@@ -167,6 +183,19 @@ class MemoryStore:
             await session.commit()
             await session.refresh(goal_row)
         return _goal_from_orm(goal_row)
+
+    async def list_active_goals(self, limit: int = 20) -> List[GoalRecord]:
+        """Return active goals ordered by priority and creation time."""
+
+        stmt: Select[tuple[GoalORM]] = (
+            select(GoalORM)
+            .where(GoalORM.status == "active")
+            .order_by(GoalORM.priority.desc(), GoalORM.created_at.desc())
+            .limit(max(1, limit))
+        )
+        async with self._database.session() as session:
+            rows = (await session.execute(stmt)).scalars().all()
+        return [_goal_from_orm(row) for row in rows]
 
     async def decay_and_archive_episodes(self, daily_decay: float = 0.95) -> int:
         """Decay episode relevance and archive stale low-importance rows."""

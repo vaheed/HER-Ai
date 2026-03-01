@@ -1,11 +1,11 @@
 services:
   app:
     build:
-      context: ..
+      context: .
       dockerfile: docker/Dockerfile
     restart: unless-stopped
     env_file:
-      - ../.env
+      - .env
     ports:
       - "${API_PORT:-8000}:8000"
     command: >
@@ -22,7 +22,7 @@ services:
     image: pgvector/pgvector:pg16
     restart: unless-stopped
     env_file:
-      - ../.env
+      - .env
     ports:
       - "${POSTGRES_PORT:-5432}:5432"
     volumes:
@@ -37,7 +37,7 @@ services:
     image: redis:7-alpine
     restart: unless-stopped
     env_file:
-      - ../.env
+      - .env
     ports:
       - "${REDIS_PORT:-6379}:6379"
     healthcheck:
@@ -50,13 +50,13 @@ services:
     image: ollama/ollama:latest
     restart: unless-stopped
     env_file:
-      - ../.env
+      - .env
     ports:
       - "${OLLAMA_PORT:-11434}:11434"
     volumes:
       - ollama:/root/.ollama
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:11434/api/tags >/dev/null"]
+      test: ["CMD", "ollama", "list"]
       interval: 5s
       timeout: 5s
       retries: 30
@@ -64,7 +64,7 @@ services:
   ollama-init:
     image: curlimages/curl:8.12.1
     env_file:
-      - ../.env
+      - .env
     depends_on:
       ollama:
         condition: service_healthy
@@ -72,17 +72,17 @@ services:
     command: >
       sh -c '
         set -eu;
-        pull_url="${OLLAMA_PULL_BASE_URL:-http://ollama:11434}";
-        until curl -fsS "$pull_url/api/tags" >/dev/null; do sleep 2; done;
-        curl -fsS "$pull_url/api/pull" -H "Content-Type: application/json" -d "{\"name\":\"$OLLAMA_MODEL\",\"stream\":false}";
-        curl -fsS "$pull_url/api/pull" -H "Content-Type: application/json" -d "{\"name\":\"$OLLAMA_EMBEDDING_MODEL\",\"stream\":false}";
+        pull_url="$${OLLAMA_PULL_BASE_URL:-http://ollama:11434}";
+        until curl -fsS "$${pull_url}/api/tags" >/dev/null; do sleep 2; done;
+        curl -fsS "$${pull_url}/api/pull" -H "Content-Type: application/json" -d "{\"name\":\"$${OLLAMA_MODEL}\",\"stream\":false}";
+        curl -fsS "$${pull_url}/api/pull" -H "Content-Type: application/json" -d "{\"name\":\"$${OLLAMA_EMBEDDING_MODEL}\",\"stream\":false}";
       '
 
   prometheus:
     image: prom/prometheus:latest
     restart: unless-stopped
     env_file:
-      - ../.env
+      - .env
     ports:
       - "${PROMETHEUS_PORT:-9090}:9090"
 
@@ -90,7 +90,7 @@ services:
     image: grafana/grafana:latest
     restart: unless-stopped
     env_file:
-      - ../.env
+      - .env
     ports:
       - "${GRAFANA_PORT:-3000}:3000"
 
@@ -98,7 +98,7 @@ services:
     image: jaegertracing/all-in-one:latest
     restart: unless-stopped
     env_file:
-      - ../.env
+      - .env
     ports:
       - "${JAEGER_UI_PORT:-16686}:16686"
 

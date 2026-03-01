@@ -31,7 +31,7 @@ python main.py
 Single compose stack:
 ```bash
 cp .env.example .env
-docker compose -f docker/docker-compose.yml up --build -d
+docker-compose up --build -d
 ```
 
 Notes:

@@ -50,7 +50,7 @@ Single stack (dev/prod-ready via `.env` values):
 
 ```bash
 cp .env.example .env
-docker compose -f docker/docker-compose.yml up --build -d
+docker-compose up --build -d
 ```
 
 Compose includes:

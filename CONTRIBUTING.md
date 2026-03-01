@@ -18,7 +18,7 @@ alembic upgrade head
 Optional local infra:
 
 ```bash
-docker compose -f docker/docker-compose.yml up --build
+docker-compose up --build
 ```
 
 ## Branch and PR Workflow

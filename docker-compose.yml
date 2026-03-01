@@ -15,7 +15,9 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      ollama-init:
+      ollama-pull-chat:
+        condition: service_completed_successfully
+      ollama-pull-embedding:
         condition: service_completed_successfully
 
   postgres:
@@ -61,22 +63,25 @@ services:
       timeout: 5s
       retries: 30
 
-  ollama-init:
+  ollama-pull-chat:
     image: ollama/ollama:latest
     env_file:
       - .env
-    entrypoint: /bin/sh
     depends_on:
       ollama:
         condition: service_healthy
     restart: "no"
-    command: >-
-      -ec '
-      export OLLAMA_HOST="${OLLAMA_HOST:-http://ollama:11434}";
-      until ollama list >/dev/null 2>&1; do sleep 2; done;
-      ollama pull "${OLLAMA_MODEL}";
-      ollama pull "${OLLAMA_EMBEDDING_MODEL}";
-      '
+    command: ["pull", "${OLLAMA_MODEL}"]
+
+  ollama-pull-embedding:
+    image: ollama/ollama:latest
+    env_file:
+      - .env
+    depends_on:
+      ollama:
+        condition: service_healthy
+    restart: "no"
+    command: ["pull", "${OLLAMA_EMBEDDING_MODEL}"]
 
 volumes:
   pgdata:

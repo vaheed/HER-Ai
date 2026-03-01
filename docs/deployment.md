@@ -35,7 +35,7 @@ docker-compose up --build -d
 ```
 
 Notes:
-- `ollama-init` blocks app startup until chat and embedding models are pulled.
+- `ollama-pull-chat` and `ollama-pull-embedding` block app startup until both models are pulled.
 - App service runs migrations at startup before launching API.
 
 ## GitHub CI/CD

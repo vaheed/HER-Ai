@@ -57,7 +57,7 @@ Compose includes:
 - PostgreSQL 16 + pgvector
 - Redis 7
 - Ollama service
-- `ollama-init` bootstrap job that pulls chat + embedding models before app starts
+- `ollama-pull-chat` and `ollama-pull-embedding` one-shot jobs that pull models before app starts
 
 ## Runtime Interfaces
 

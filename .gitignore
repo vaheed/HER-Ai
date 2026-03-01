@@ -1,42 +1,15 @@
-# Python
-
-# Python cache
+.DS_Store
+.env
+.env.local
+.venv/
+venv/
 __pycache__/
 *.py[cod]
-*.class
-*.so
-.Python
-
-# Environment
-.env
-.venv
-env/
-venv/
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Logs
-*.log
-logs/
-
-# Test coverage
+*.egg-info/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
 .coverage
 htmlcov/
-.pytest_cache/
-
-# Build
-build/
-dist/
-*.egg-info/
-
-# Docs build output
-site/
+.idea/
+.vscode/

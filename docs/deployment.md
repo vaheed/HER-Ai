@@ -1,61 +1,51 @@
 # Deployment Guide
 
-## Deployment Modes
+## Prerequisites
 
-- Local/staging with `docker compose`
-- Production-like deployment with prebuilt images from GHCR
+- Python 3.12 recommended
+- Docker + Docker Compose
+- PostgreSQL and Redis connectivity
+- Optional cloud/API provider credentials
 
-## Container Build and Run
+## Environment Setup
 
-Build images:
+1. Copy template:
+   ```bash
+   cp .env.example .env
+   ```
+2. Set secrets and endpoints.
+3. Verify provider order and embedding provider.
 
-```bash
-docker compose build her-bot dashboard sandbox
-```
-
-Run services:
-
-```bash
-docker compose up -d
-```
-
-Validate:
+## Local Process Deployment
 
 ```bash
-docker compose ps
-curl -sS http://localhost:8000
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
+alembic upgrade head
+python main.py
 ```
 
-## Production Recommendations
+## Docker Compose Deployment
 
-1. Use immutable image tags (release tags) instead of `latest`.
-2. Store secrets in external secret manager or protected env system.
-3. Restrict network exposure to required ports.
-4. Enable log collection and retention for `her-bot` and `dashboard`.
-5. Backup Postgres and Redis volumes.
-6. Track MCP availability and scheduler task health in dashboard pages.
+Development:
+```bash
+docker compose -f docker/docker-compose.yml up --build
+```
 
-## Environment Hardening
+Production-like:
+```bash
+docker compose -f docker/docker-compose.prod.yml up --build -d
+```
 
-- Set strong DB/Redis credentials.
-- Review `MCP_CONFIG_PATH` and disable unneeded servers.
-- Keep sandbox limits (`HER_SANDBOX_*`) conservative in shared environments.
-- Run with explicit timezone (`TZ`) and operational alerts.
+Notes:
+- `ollama-init` blocks app startup until chat and embedding models are pulled.
+- App service runs migrations at startup before launching API.
 
-## CI/CD and Image Publishing
+## GitHub CI/CD
 
-` .github/workflows/ci.yml` builds and publishes:
-- `ghcr.io/<owner>/her-ai/her-bot`
-- `ghcr.io/<owner>/her-ai/her-dashboard`
-- `ghcr.io/<owner>/her-ai/her-sandbox`
-
-Docs are built with MkDocs and deployed to GitHub Pages when `main` updates.
-
-## Operational Runbook (Minimal)
-
-1. Pull latest stable images.
-2. Update `.env` and config files.
-3. Start services with compose.
-4. Confirm health endpoint and dashboard.
-5. Test `/status` and `/mcp` in Telegram.
-6. Review logs for startup capability warnings.
+- `test.yml`:
+  - lint, typecheck, migrations, full tests
+  - uses live Postgres and Redis services in workflow
+- `deploy.yml`:
+  - builds and pushes container image to GHCR

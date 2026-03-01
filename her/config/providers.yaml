@@ -1,0 +1,9 @@
+priority:
+  - openai
+  - anthropic
+  - custom
+  - ollama
+fallback_on:
+  - timeout
+  - rate_limit
+  - server_error

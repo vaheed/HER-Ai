@@ -1,79 +1,55 @@
-# Architecture Overview
+# Architecture
 
-## System Layers
+## High-Level Runtime Graph
 
-HER-Ai is organized into five layers:
+1. Interface receives interaction (REST/WebSocket/Telegram)
+2. Orchestrator passes interaction to `ConversationAgent`
+3. Pipeline stages:
+   - preprocess input
+   - retrieve semantic memory + recent episodes + active goals
+   - build personality-aware system prompt
+   - enforce token budget and context priority
+   - route LLM request through provider fallback
+   - enforce post-response guardrails
+   - persist episode + usage + events
+4. Response returned through calling interface
 
-1. Interface layer
-- Telegram bot interface (`her-core/her_telegram/bot.py`, `her-core/her_telegram/handlers.py`)
-- Admin dashboard (`dashboard/app.py`)
+## Storage and Infrastructure
 
-2. Orchestration layer
-- Runtime composition and service boot (`her-core/main.py`)
-- CrewAI agents (`her-core/agents/*.py`)
-- Task scheduler (`her-core/utils/scheduler.py`, APScheduler + SQLAlchemy job store, no sleep polling)
+- PostgreSQL 16 + pgvector
+  - episodic memory (`episodes`)
+  - semantic memory (`semantic_memory`)
+  - goals (`goals`)
+  - personality snapshots (`personality_snapshots`)
+  - relationship state (`relationship_state`)
+  - LLM usage logs (`llm_usage_log`)
+- Redis 7
+  - session working memory (Hash + TTL)
+  - event stream (`her:events`)
+- Ollama
+  - local chat model execution
+  - local embedding model execution
 
-3. Intelligence and tools layer
-- LLM provider factory (`her-core/utils/llm_factory.py`)
-- MCP server manager (`her-core/her_mcp/manager.py`)
-- Curated tool wrappers (`her-core/her_mcp/tools.py`)
-- Sandbox execution adapters (`her-core/her_mcp/sandbox_tools.py`)
+## Service Boundaries
 
-4. Memory and state layer
-- Long-term memory wrapper (`her-core/memory/mem0_client.py`)
-- Short-term context cache (`her-core/memory/redis_client.py`)
-- DB initialization and schema (`her-core/memory/db_init.py`, `her-core/memory/schemas.sql`)
-- Runtime metrics/decision logs (`her-core/utils/metrics.py`, `her-core/utils/decision_log.py`)
+- `her/agents/*`: orchestration, conversation flow, preprocessing, token budgeting, reflection
+- `her/memory/*`: persistence models, migrations, CRUD/search logic, lifecycle jobs
+- `her/personality/*`: drift, emotion, prompt composition, manager
+- `her/providers/*`: LLM providers + fallback router
+- `her/embeddings/*`: embedding providers + service abstraction
+- `her/interfaces/*`: REST, WebSocket, Telegram
+- `her/observability/*`: logs, metrics, tracing
 
-5. Infrastructure layer
-- Compose stack (`docker-compose.yml`)
-- Image definitions (`her-core/Dockerfile`, `dashboard/Dockerfile`, `sandbox/Dockerfile`)
-- CI/CD (`.github/workflows/ci.yml`)
+## Reliability Strategies
 
-## Runtime Flow
+- Provider fallback on timeout/rate-limit/server/auth errors
+- In-memory cache fallback when all LLM providers fail
+- Redis working-memory fallback to local in-process storage
+- Session-level token budget trimming to prevent context overflow
 
-```text
-Telegram message
-  -> her_telegram.handlers.MessageHandlers
-  -> strict intent classifier (CHAT_MODE default, ACTION_MODE on explicit high-confidence action intent)
-  -> autonomy profile update (engagement + initiative + mood persistence)
-  -> internal debate (Planner -> Skeptic -> Verifier gate)
-  -> context update (Redis)
-  -> memory lookup (Mem0/pgvector)
-  -> LLM response generation (with optional failover)
-  -> validated tool/sandbox action execution (immediate by default; scheduler only on explicit scheduling intent)
-  -> metrics + decision logs persisted
-```
+## Security and Safety Controls
 
-## Major Modules and Responsibilities
-
-| Module | Responsibility | Primary Files |
-|---|---|---|
-| `her-core` | Main assistant runtime, agents, memory, telegram handling, scheduling | `her-core/main.py`, `her-core/her_telegram/handlers.py` |
-| `her-core/agents` | CrewAI roles for conversation, reflection, personality, tools | `her-core/agents/conversation_agent.py`, `her-core/agents/crew_orchestrator.py` |
-| `her-core/her_mcp` | MCP server lifecycle, tool abstraction, sandbox utilities | `her-core/her_mcp/manager.py`, `her-core/her_mcp/tools.py` |
-| `her-core/memory` | Mem0 integration, context cache, schema compatibility | `her-core/memory/mem0_client.py`, `her-core/memory/schemas.sql` |
-| `dashboard` | Operational visibility, health and metrics UI | `dashboard/app.py` |
-| `tests` | Runtime guardrails and smoke checks | `tests/test_runtime_guards.py`, `tests/test_smoke.py` |
-
-## Service Topology (Compose)
-
-| Service | Purpose | Data |
-|---|---|---|
-| `her-bot` | Core app runtime | Redis + PostgreSQL + MCP/sandbox access |
-| `postgres` | Long-term memory and logs | persistent volume |
-| `redis` | context and metrics cache | persistent AOF volume |
-| `ollama` + `ollama-init` | local model serving and model pre-pull | model volume |
-| `sandbox` | isolated execution tools | ephemeral workspace volume |
-| `dashboard` | monitoring and operations UI | reads Redis/Postgres |
-
-Reference: `docker-compose.yml`.
-
-## Design Notes
-
-- Config resolution supports runtime volume and fallback defaults via `HER_CONFIG_DIR` (`her-core/utils/config_paths.py`).
-- MCP startup is resilient to per-server failures/timeouts (`MCP_SERVER_START_TIMEOUT_SECONDS`).
-- Memory reads/writes can degrade gracefully when backend is unavailable if `MEMORY_STRICT_MODE=false`.
-- Scheduler tasks persist to YAML and fallback to Redis override if config path is not writable.
-- Proactive autonomy uses deterministic seeded randomness per user/day with DB-level daily slot caps.
-- Daily autonomy reflection adjusts initiative gradually and writes reflection events for dashboard observability.
+- Ethical hard rules enforced pre and post LLM generation
+- Tool execution sandbox boundaries (module-level)
+- Secrets expected from environment variables / secret managers
+- No credentials committed to repository

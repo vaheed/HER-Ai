@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any, cast
+
 from fastapi import APIRouter, Request
 
 from her.models import ChatRequest, ChatResponse
@@ -14,7 +16,7 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
 
     REQUEST_COUNTER.labels(route="chat").inc()
     orchestrator = request.app.state.orchestrator
-    trace_id = request.state.request_id
+    trace_id = cast(str, cast(Any, request.state).request_id)
     llm_response = await orchestrator.handle_interaction(
         session_id=payload.session_id,
         content=payload.content,

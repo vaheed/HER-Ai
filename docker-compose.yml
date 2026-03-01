@@ -78,30 +78,6 @@ services:
         curl -fsS "$${pull_url}/api/pull" -H "Content-Type: application/json" -d "{\"name\":\"$${OLLAMA_EMBEDDING_MODEL}\",\"stream\":false}";
       '
 
-  prometheus:
-    image: prom/prometheus:latest
-    restart: unless-stopped
-    env_file:
-      - .env
-    ports:
-      - "${PROMETHEUS_PORT:-9090}:9090"
-
-  grafana:
-    image: grafana/grafana:latest
-    restart: unless-stopped
-    env_file:
-      - .env
-    ports:
-      - "${GRAFANA_PORT:-3000}:3000"
-
-  jaeger:
-    image: jaegertracing/all-in-one:latest
-    restart: unless-stopped
-    env_file:
-      - .env
-    ports:
-      - "${JAEGER_UI_PORT:-16686}:16686"
-
 volumes:
   pgdata:
   ollama:

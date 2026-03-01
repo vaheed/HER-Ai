@@ -28,14 +28,10 @@ python main.py
 
 ## Docker Compose Deployment
 
-Development:
+Single compose stack:
 ```bash
-docker compose -f docker/docker-compose.yml up --build
-```
-
-Production-like:
-```bash
-docker compose -f docker/docker-compose.prod.yml up --build -d
+cp .env.example .env
+docker compose -f docker/docker-compose.yml up --build -d
 ```
 
 Notes:
@@ -44,8 +40,6 @@ Notes:
 
 ## GitHub CI/CD
 
-- `test.yml`:
+- `test.yml` (`ci-cd` workflow):
   - lint, typecheck, migrations, full tests
-  - uses live Postgres and Redis services in workflow
-- `deploy.yml`:
-  - builds and pushes container image to GHCR
+  - then builds and pushes container image to GHCR (after tests pass)

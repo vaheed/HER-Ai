@@ -3,14 +3,11 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile
+    restart: unless-stopped
     env_file:
-      - ../.env.example
-    environment:
-      DATABASE_URL: postgresql+asyncpg://her:her@postgres:5432/her
-      REDIS_URL: redis://redis:6379/0
-      OLLAMA_BASE_URL: http://ollama:11434
+      - ../.env
     ports:
-      - "8000:8000"
+      - "${API_PORT:-8000}:8000"
     command: >
       sh -c "alembic upgrade head && python main.py"
     depends_on:
@@ -23,24 +20,26 @@ services:
 
   postgres:
     image: pgvector/pgvector:pg16
-    environment:
-      POSTGRES_DB: her
-      POSTGRES_USER: her
-      POSTGRES_PASSWORD: her
+    restart: unless-stopped
+    env_file:
+      - ../.env
     ports:
-      - "5432:5432"
+      - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U her -d her"]
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 5s
       timeout: 3s
       retries: 20
 
   redis:
     image: redis:7-alpine
+    restart: unless-stopped
+    env_file:
+      - ../.env
     ports:
-      - "6379:6379"
+      - "${REDIS_PORT:-6379}:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -49,22 +48,23 @@ services:
 
   ollama:
     image: ollama/ollama:latest
+    restart: unless-stopped
+    env_file:
+      - ../.env
     ports:
-      - "11434:11434"
+      - "${OLLAMA_PORT:-11434}:11434"
     volumes:
       - ollama:/root/.ollama
     healthcheck:
-      test: ["CMD", "ollama", "list"]
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:11434/api/tags >/dev/null"]
       interval: 5s
       timeout: 5s
-      retries: 20
+      retries: 30
 
   ollama-init:
     image: curlimages/curl:8.12.1
-    environment:
-      OLLAMA_BASE_URL: http://ollama:11434
-      OLLAMA_CHAT_MODEL: ${OLLAMA_MODEL:-llama3.1:8b}
-      OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}
+    env_file:
+      - ../.env
     depends_on:
       ollama:
         condition: service_healthy
@@ -72,25 +72,35 @@ services:
     command: >
       sh -c '
         set -eu;
-        until curl -fsS "$OLLAMA_BASE_URL/api/tags" >/dev/null; do sleep 2; done;
-        curl -fsS "$OLLAMA_BASE_URL/api/pull" -d "{\"name\":\"$OLLAMA_CHAT_MODEL\",\"stream\":false}";
-        curl -fsS "$OLLAMA_BASE_URL/api/pull" -d "{\"name\":\"$OLLAMA_EMBEDDING_MODEL\",\"stream\":false}";
+        pull_url="${OLLAMA_PULL_BASE_URL:-http://ollama:11434}";
+        until curl -fsS "$pull_url/api/tags" >/dev/null; do sleep 2; done;
+        curl -fsS "$pull_url/api/pull" -H "Content-Type: application/json" -d "{\"name\":\"$OLLAMA_MODEL\",\"stream\":false}";
+        curl -fsS "$pull_url/api/pull" -H "Content-Type: application/json" -d "{\"name\":\"$OLLAMA_EMBEDDING_MODEL\",\"stream\":false}";
       '
 
   prometheus:
     image: prom/prometheus:latest
+    restart: unless-stopped
+    env_file:
+      - ../.env
     ports:
-      - "9090:9090"
+      - "${PROMETHEUS_PORT:-9090}:9090"
 
   grafana:
     image: grafana/grafana:latest
+    restart: unless-stopped
+    env_file:
+      - ../.env
     ports:
-      - "3000:3000"
+      - "${GRAFANA_PORT:-3000}:3000"
 
   jaeger:
     image: jaegertracing/all-in-one:latest
+    restart: unless-stopped
+    env_file:
+      - ../.env
     ports:
-      - "16686:16686"
+      - "${JAEGER_UI_PORT:-16686}:16686"
 
 volumes:
   pgdata:

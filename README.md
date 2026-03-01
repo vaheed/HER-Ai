@@ -46,19 +46,14 @@ Server defaults to `http://127.0.0.1:8000`.
 
 ## Docker
 
-Development:
+Single stack (dev/prod-ready via `.env` values):
 
 ```bash
-docker compose -f docker/docker-compose.yml up --build
+cp .env.example .env
+docker compose -f docker/docker-compose.yml up --build -d
 ```
 
-Production-like stack:
-
-```bash
-docker compose -f docker/docker-compose.prod.yml up --build -d
-```
-
-Both compose files include:
+Compose includes:
 - PostgreSQL 16 + pgvector
 - Redis 7
 - Ollama service

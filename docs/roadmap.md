@@ -13,7 +13,7 @@
 - [x] Pydantic `BaseSettings` + `.env.example` + provider routing config
 - [x] Top-level package scaffold and module boundaries
 - [x] Structured logging (`structlog`) + OpenTelemetry tracing bootstrap + Prometheus metrics endpoint
-- [x] GitHub Actions test/deploy workflows
+- [x] Unified GitHub Actions CI/CD workflow (test -> build/push)
 - [x] LLM provider abstraction and fallback router (OpenAI, Anthropic, Custom Endpoint, Ollama)
 - [x] Hello flow script (`scripts/hello_her.py`)
 
@@ -52,7 +52,7 @@
 - [x] Docker Compose includes `ollama` runtime service
 - [x] Compose startup guarantees model bootstrap (`ollama-init`) before app starts
 - [x] Ollama chat model + embedding model pull configured via environment variables
-- [x] Dev/prod compose files aligned for dependency startup ordering
+- [x] Single docker-compose stack aligned for dependency startup ordering
 
 ### Phase 3 – Conversation Agent
 
@@ -147,11 +147,9 @@ her/
 │   └── run_reflection.py
 ├── docker/
 │   ├── Dockerfile
-│   ├── docker-compose.yml
-│   └── docker-compose.prod.yml  # NEW: separate prod compose
+│   └── docker-compose.yml
 ├── .github/workflows/           # NEW: CI/CD
-│   ├── test.yml
-│   └── deploy.yml
+│   └── test.yml
 ├── main.py
 └── README.md
 ```
@@ -187,7 +185,7 @@ her/
 
 **CI/CD (GitHub Actions)**
 - `test.yml`: lint → typecheck → unit tests on every PR
-- `deploy.yml`: build Docker image → push to registry on merge to `main`
+- `test.yml` (`ci-cd`): lint -> typecheck -> migrations -> tests -> build/push image on `main` and tags
 
 **LLM Provider Test**
 - Implement base `LLMProvider` abstract class
@@ -648,9 +646,9 @@ Dashboard live, Grafana dashboard with 5+ panels, all key metrics visible.
 - [ ] Database backups configured (pg_dump cron)
 - [ ] `.env.prod` vs `.env.dev` separation enforced
 
-### Production Deploy (Docker Compose Production)
+### Production Deploy (Docker Compose)
 ```yaml
-# docker-compose.prod.yml additions:
+# docker-compose.yml production additions:
 - Restart policies: always
 - Resource limits (memory, CPU) per service
 - Secrets via Docker secrets or external vault
@@ -691,4 +689,4 @@ HER v1 stable, test coverage >70%, all hardening checklist items checked, runnin
 7. **Reward signal taxonomy** — explicit, documented, testable reinforcement signals.
 8. **Simulation test suite** — 100 synthetic conversations to stress-test the full pipeline.
 9. **Production hardening checklist** — explicit security, reliability, and ops requirements.
-10. **Separate prod Docker Compose** — resource limits, restart policies, secrets management.
+10. **Single Docker Compose via .env** — one stack, environment-driven behavior.

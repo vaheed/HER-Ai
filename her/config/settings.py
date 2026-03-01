@@ -1,16 +1,24 @@
 from __future__ import annotations
 
+import json
 from functools import lru_cache
-from typing import List
+from typing import Annotated, List
 
 from pydantic import Field, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+
+DEFAULT_PROVIDER_PRIORITY: list[str] = ["openai", "anthropic", "custom", "ollama"]
 
 
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
 
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+        env_ignore_empty=True,
+    )
 
     app_name: str = "her-ai"
     environment: str = "dev"
@@ -49,7 +57,7 @@ class Settings(BaseSettings):
     active_goal_limit: int = 5
     telegram_bot_token: str = ""
 
-    provider_priority: List[str] = Field(default_factory=lambda: ["openai", "anthropic", "custom", "ollama"])
+    provider_priority: Annotated[List[str], NoDecode] = Field(default_factory=lambda: DEFAULT_PROVIDER_PRIORITY.copy())
 
     @field_validator("provider_priority", mode="before")
     @classmethod
@@ -57,10 +65,20 @@ class Settings(BaseSettings):
         """Support comma-separated or JSON-like provider priority values."""
 
         if isinstance(value, str):
-            return [entry.strip() for entry in value.split(",") if entry.strip()]
+            stripped = value.strip()
+            if not stripped:
+                return DEFAULT_PROVIDER_PRIORITY.copy()
+            if stripped.startswith("["):
+                try:
+                    parsed = json.loads(stripped)
+                except json.JSONDecodeError:
+                    parsed = None
+                if isinstance(parsed, list):
+                    return [str(entry).strip() for entry in parsed if str(entry).strip()]
+            return [entry.strip() for entry in stripped.split(",") if entry.strip()]
         if isinstance(value, list):
             return [str(entry).strip() for entry in value if str(entry).strip()]
-        return ["openai", "anthropic", "custom", "ollama"]
+        return DEFAULT_PROVIDER_PRIORITY.copy()
 
     @field_validator("embedding_provider", mode="before")
     @classmethod

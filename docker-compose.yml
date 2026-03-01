@@ -65,19 +65,17 @@ services:
     image: ollama/ollama:latest
     env_file:
       - .env
+    entrypoint: ["/bin/sh", "-c"]
     depends_on:
       ollama:
         condition: service_healthy
     restart: "no"
-    command:
-      - sh
-      - -c
-      - |
-        set -eu
-        export OLLAMA_HOST="${OLLAMA_HOST:-http://ollama:11434}"
-        until ollama list >/dev/null 2>&1; do sleep 2; done
-        ollama pull "${OLLAMA_MODEL}"
-        ollama pull "${OLLAMA_EMBEDDING_MODEL}"
+    command: |
+      set -eu
+      export OLLAMA_HOST="${OLLAMA_HOST:-http://ollama:11434}"
+      until ollama list >/dev/null 2>&1; do sleep 2; done
+      ollama pull "${OLLAMA_MODEL}"
+      ollama pull "${OLLAMA_EMBEDDING_MODEL}"
 
 volumes:
   pgdata:

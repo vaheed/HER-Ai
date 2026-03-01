@@ -62,16 +62,22 @@ services:
       retries: 30
 
   ollama-init:
-    image: curlimages/curl:8.12.1
+    image: ollama/ollama:latest
     env_file:
       - .env
-    volumes:
-      - ./scripts/ollama_init.sh:/bootstrap/ollama_init.sh:ro
     depends_on:
       ollama:
         condition: service_healthy
     restart: "no"
-    command: ["sh", "/bootstrap/ollama_init.sh"]
+    command:
+      - sh
+      - -c
+      - |
+        set -eu
+        export OLLAMA_HOST="${OLLAMA_HOST:-http://ollama:11434}"
+        until ollama list >/dev/null 2>&1; do sleep 2; done
+        ollama pull "${OLLAMA_MODEL}"
+        ollama pull "${OLLAMA_EMBEDDING_MODEL}"
 
 volumes:
   pgdata:

@@ -1,0 +1,88 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "${API_PORT:-8000}:8000"
+    command: >
+      sh -c "alembic upgrade head && python main.py"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      ollama-pull-chat:
+        condition: service_completed_successfully
+      ollama-pull-embedding:
+        condition: service_completed_successfully
+
+  postgres:
+    image: pgvector/pgvector:pg17
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "${OLLAMA_PORT:-11434}:11434"
+    volumes:
+      - ollama:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  ollama-pull-chat:
+    image: ollama/ollama:latest
+    env_file:
+      - .env
+    depends_on:
+      ollama:
+        condition: service_healthy
+    restart: "no"
+    command: ["pull", "${OLLAMA_MODEL}"]
+
+  ollama-pull-embedding:
+    image: ollama/ollama:latest
+    env_file:
+      - .env
+    depends_on:
+      ollama:
+        condition: service_healthy
+    restart: "no"
+    command: ["pull", "${OLLAMA_EMBEDDING_MODEL}"]
+
+volumes:
+  pgdata:
+  ollama:

@@ -50,14 +50,14 @@ Single stack (dev/prod-ready via `.env` values):
 
 ```bash
 cp .env.example .env
-docker compose -f docker/docker-compose.yml up --build -d
+docker-compose up --build -d
 ```
 
 Compose includes:
 - PostgreSQL 16 + pgvector
 - Redis 7
 - Ollama service
-- `ollama-init` bootstrap job that pulls chat + embedding models before app starts
+- `ollama-pull-chat` and `ollama-pull-embedding` one-shot jobs that pull models before app starts
 
 ## Runtime Interfaces
 

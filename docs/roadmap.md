@@ -146,8 +146,8 @@ her/
 │   ├── seed_memory.py
 │   └── run_reflection.py
 ├── docker/
-│   ├── Dockerfile
-│   └── docker-compose.yml
+│   └── Dockerfile
+├── docker-compose.yml
 ├── .github/workflows/           # NEW: CI/CD
 │   └── test.yml
 ├── main.py

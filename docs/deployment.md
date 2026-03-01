@@ -31,11 +31,11 @@ python main.py
 Single compose stack:
 ```bash
 cp .env.example .env
-docker compose -f docker/docker-compose.yml up --build -d
+docker-compose up --build -d
 ```
 
 Notes:
-- `ollama-init` blocks app startup until chat and embedding models are pulled.
+- `ollama-pull-chat` and `ollama-pull-embedding` block app startup until both models are pulled.
 - App service runs migrations at startup before launching API.
 
 ## GitHub CI/CD

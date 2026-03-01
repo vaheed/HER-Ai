@@ -13,7 +13,7 @@ jobs:
       contents: read
       packages: write
     env:
-      IMAGE_NAME: ghcr.io/${{ github.repository }}
+      IMAGE_NAME: ghcr.io/vaheed/her-ai
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3

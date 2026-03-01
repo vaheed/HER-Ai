@@ -13,3 +13,4 @@ __pycache__/
 htmlcov/
 .idea/
 .vscode/
+.DS_Store
